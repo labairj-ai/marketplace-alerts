@@ -64,12 +64,22 @@
     a:hover { opacity: 0.8; }
     button:hover:not(:disabled) { opacity: 0.88; }
 
-    @media (max-width: 640px) {
+    @media (max-width: 700px) {
       .hide-mobile { display: none !important; }
-      .ma-nav { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-      .ma-nav::-webkit-scrollbar { display: none; }
       .ma-header { padding: 0 14px !important; }
-      .ma-main   { padding: 16px 12px !important; }
+      .ma-body { flex-direction: column !important; }
+      .ma-sidebar {
+        width: 100% !important; min-height: unset !important; position: static !important;
+        border-right: none !important; border-bottom: 1px solid var(--border) !important;
+        padding: 10px 10px !important;
+        display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important;
+        gap: 6px !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      .ma-sidebar::-webkit-scrollbar { display: none; }
+      .ma-sidebar-label { display: none !important; }
+      .ma-sidebar-add { flex-shrink: 0 !important; width: auto !important; }
+      .ma-main { padding: 16px 12px !important; }
       .history-grid { grid-template-columns: auto 1fr auto !important; }
       .history-grid .hide-mobile { display: none !important; }
       .scan-grid { grid-template-columns: auto 1fr auto !important; }
@@ -364,200 +374,132 @@ function SearchModal({ initial, onSave, onClose }) {
   );
 }
 
-/* ─── Searches + Listings combined view ─────────────────────── */
-function SearchesView({ onCheckNow }) {
-  const [searches, setSearches] = useState([]);
-  const [listings, setListings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState(null);
-  const [checking, setChecking] = useState({});
+/* ─── Single search detail view ─────────────────────────────── */
+function SearchDetailView({ search, onCheckNow, onEdit, onDelete, onToggle }) {
+  const [sort, setSort]               = useState("listed_desc");
   const [filterClass, setFilterClass] = useState("ALL");
-  const [sort, setSort] = useState("newest");
+  const [listings, setListings]       = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [checking, setChecking]       = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
-    let listUrl = `/api/listings?sort=${sort}`;
-    if (filterClass !== "ALL") listUrl += `&classification=${filterClass}`;
-    Promise.all([API("/api/searches"), API(listUrl)])
-      .then(([s, l]) => { setSearches(s); setListings(l); setLoading(false); });
-  }, [filterClass, sort]);
+    let url = `/api/listings?search_id=${search.id}&sort=${sort}`;
+    if (filterClass !== "ALL") url += `&classification=${filterClass}`;
+    API(url).then(l => { setListings(l); setLoading(false); });
+  }, [search.id, sort, filterClass]);
+
   useEffect(() => { load(); }, [load]);
 
-  async function saveSearch(payload) {
-    if (modal && modal.id) {
-      await fetch(`/api/searches/${modal.id}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    } else {
-      await fetch("/api/searches", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    }
-    setModal(null); load();
-  }
-
-  async function deleteSearch(id) {
-    if (!confirm("Delete this saved search?")) return;
-    await fetch(`/api/searches/${id}`, {method:"DELETE"});
+  async function handleCheck() {
+    setChecking(true);
+    await onCheckNow(search.id);
+    setChecking(false);
     load();
   }
 
-  async function toggleSearch(s) {
-    await fetch(`/api/searches/${s.id}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!s.enabled})});
-    load();
-  }
-
-  async function handleCheck(id) {
-    setChecking(c => ({...c,[id]:true}));
-    await onCheckNow(id);
-    setChecking(c => ({...c,[id]:false}));
-    load();
-  }
-
-  function editForm(s) {
-    return {
-      name:s.name, enabled:s.enabled, notify_email:s.notify_email,
-      keywords:(s.keywords||[]).join(", "),
-      keyword_alts:(s.keyword_alts||[]).join(", "),
-      exclude_keywords:(s.exclude_keywords||[]).join(", "),
-      price_min:s.price_min??"", price_max:s.price_max??"",
-      center_label:s.center_label, center_lat:s.center_lat, center_lon:s.center_lon,
-      radius_miles:s.radius_miles,
-    };
-  }
-
-  const listingsMap = listings.reduce((m, l) => {
-    if (!m[l.search_id]) m[l.search_id] = [];
-    m[l.search_id].push(l);
-    return m;
-  }, {});
-
-  if (loading) return <Loader />;
-
-  const fmtPrice = p => p != null ? `$${Number(p).toLocaleString()}` : "—";
-  const fmtDate  = d => d ? new Date(d).toLocaleDateString() : "—";
+  const confirmed = listings.filter(l => l.classification === "CONFIRMED");
+  const possible  = listings.filter(l => l.classification === "POSSIBLE");
+  const fmtPrice  = p => p != null ? `$${Number(p).toLocaleString()}` : "—";
+  const fmtDate   = d => d ? new Date(d).toLocaleDateString() : "—";
 
   return (
     <div>
-      {modal !== null && (
-        <SearchModal initial={modal==="new"?null:editForm(modal)} onSave={saveSearch} onClose={()=>setModal(null)} />
-      )}
+      {/* Search header */}
+      <div style={{marginBottom:18}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <h2 style={{fontSize:20,fontWeight:700,color:"var(--text)",letterSpacing:"-0.02em",margin:0}}>{search.name}</h2>
+            <Pill bg={search.enabled?"var(--green-bg)":"var(--surface2)"}
+              color={search.enabled?"var(--green)":"var(--muted)"}
+              border={search.enabled?"var(--green-br)":"var(--border2)"}>
+              {search.enabled?"● Active":"○ Paused"}
+            </Pill>
+            {confirmed.length > 0 && <Pill {...CONFIRMED_C}>{confirmed.length} confirmed</Pill>}
+            {possible.length > 0  && <Pill {...POSSIBLE_C}>{possible.length} possible</Pill>}
+          </div>
+          <div style={{display:"flex",gap:5,flexShrink:0}}>
+            <Btn onClick={handleCheck} variant="success" disabled={checking} style={{padding:"5px 11px",fontSize:12.5}}>
+              {checking ? "Scanning…" : "▶ Scan now"}
+            </Btn>
+            <Btn onClick={() => onToggle(search)} variant="ghost" style={{padding:"5px 11px",fontSize:12.5}}>
+              {search.enabled ? "Pause" : "Resume"}
+            </Btn>
+            <Btn onClick={() => onEdit(search)} variant="ghost" style={{padding:"5px 11px",fontSize:12.5}}>Edit</Btn>
+            <Btn onClick={() => onDelete(search.id)} variant="danger" title="Delete" style={{padding:"5px 9px",fontSize:12.5}}>✕</Btn>
+          </div>
+        </div>
 
-      <PageHeader title="Watchlist" sub={`${searches.length} saved search${searches.length!==1?"es":""}`}>
-        <SegmentedControl options={["ALL","CONFIRMED","POSSIBLE"]} value={filterClass} onChange={setFilterClass} />
-        <select value={sort} onChange={e=>setSort(e.target.value)} style={{
-          border:"1.5px solid var(--border2)",borderRadius:8,padding:"6px 10px",
-          fontSize:12.5,background:"var(--surface)",color:"var(--text)",cursor:"pointer"}}>
-          <option value="newest">Found: newest first</option>
-          <option value="listed_desc">Listed: newest first</option>
-          <option value="listed_asc">Listed: oldest first</option>
-          <option value="price_asc">Price: low → high</option>
-          <option value="price_desc">Price: high → low</option>
-        </select>
-        <Btn onClick={()=>setModal("new")} variant="primary">+ Add search</Btn>
-      </PageHeader>
+        {/* Controls */}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <SegmentedControl options={["ALL","CONFIRMED","POSSIBLE"]} value={filterClass} onChange={setFilterClass} />
+          <select value={sort} onChange={e => setSort(e.target.value)} style={{
+            border:"1.5px solid var(--border2)",borderRadius:8,padding:"5px 10px",
+            fontSize:12.5,background:"var(--surface)",color:"var(--text)",cursor:"pointer"}}>
+            <option value="listed_desc">Listed: newest first</option>
+            <option value="listed_asc">Listed: oldest first</option>
+            <option value="price_asc">Price: low → high</option>
+            <option value="price_desc">Price: high → low</option>
+            <option value="newest">Found: newest first</option>
+          </select>
+        </div>
+      </div>
 
-      {searches.length === 0 ? (
-        <EmptyState icon="◎" title="Nothing on your watchlist" sub="Add a saved search to start monitoring marketplaces for deals." />
-      ) : (
+      {loading ? <Loader /> : (
         <Card>
-          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-            <table style={{width:"100%",minWidth:480,borderCollapse:"collapse",fontSize:13}}>
-              <thead>
-                <tr>
-                  <th style={{...TH,width:"40%"}}>Title</th>
-                  <th style={{...TH,textAlign:"right"}}>Price</th>
-                  <th style={{...TH}}>Match</th>
-                  <th style={{...TH}}>Source</th>
-                  <th style={{...TH}} className="hide-mobile">Location</th>
-                  <th style={{...TH}} className="hide-mobile">Listed</th>
-                </tr>
-              </thead>
-              {searches.map((s, si) => {
-                const searchListings = listingsMap[s.id] || [];
-                const confirmed = searchListings.filter(l => l.classification === "CONFIRMED");
-                const possible  = searchListings.filter(l => l.classification === "POSSIBLE");
-
-                return (
-                  <tbody key={s.id}>
-                    {/* Section header row */}
-                    <tr>
-                      <td colSpan={6} style={{
-                        padding:"9px 14px",
-                        borderTop: si > 0 ? "2px solid var(--border2)" : "none",
-                        background:"var(--surface2)",
-                      }}>
-                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                          <div style={{width:3,height:14,borderRadius:2,flexShrink:0,
-                            background:s.enabled?"var(--green)":"var(--border2)"}} />
-                          <span style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{s.name}</span>
-                          <Pill bg={s.enabled?"var(--green-bg)":"var(--surface2)"}
-                            color={s.enabled?"var(--green)":"var(--muted)"}
-                            border={s.enabled?"var(--green-br)":"var(--border2)"}>
-                            {s.enabled?"● Active":"○ Paused"}
-                          </Pill>
-                          {confirmed.length > 0 && <Pill {...CONFIRMED_C}>{confirmed.length} confirmed</Pill>}
-                          {possible.length > 0  && <Pill {...POSSIBLE_C}>{possible.length} possible</Pill>}
-                          <div style={{marginLeft:"auto",display:"flex",gap:5,flexShrink:0}}>
-                            <Btn onClick={()=>handleCheck(s.id)} variant="success" disabled={checking[s.id]}
-                              style={{padding:"4px 10px",fontSize:12}}>
-                              {checking[s.id]?"…":"Scan"}
-                            </Btn>
-                            <Btn onClick={()=>toggleSearch(s)} variant="ghost"
-                              style={{padding:"4px 10px",fontSize:12}}>
-                              {s.enabled?"Pause":"Resume"}
-                            </Btn>
-                            <Btn onClick={()=>setModal(s)} variant="ghost"
-                              style={{padding:"4px 10px",fontSize:12}}>Edit</Btn>
-                            <Btn onClick={()=>deleteSearch(s.id)} variant="danger" title="Delete"
-                              style={{padding:"4px 8px",fontSize:12}}>✕</Btn>
-                          </div>
+          {listings.length === 0 ? (
+            <div style={{padding:"44px 24px",textAlign:"center",color:"var(--muted)",fontSize:13}}>
+              No matches yet — run a scan to find listings.
+            </div>
+          ) : (
+            <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+              <table style={{width:"100%",minWidth:460,borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr>
+                    <th style={{...TH,width:"44%"}}>Title</th>
+                    <th style={{...TH,textAlign:"right"}}>Price</th>
+                    <th style={{...TH}}>Match</th>
+                    <th style={{...TH}}>Source</th>
+                    <th style={{...TH}} className="hide-mobile">Location</th>
+                    <th style={{...TH}} className="hide-mobile">Listed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {listings.map((l, ri) => (
+                    <tr key={`${l.id}-${l.search_id}`}
+                      style={{borderTop:"1px solid var(--border)",
+                        background: ri%2===0 ? "var(--surface)" : "var(--surface2)"}}>
+                      <td style={{...TD,maxWidth:0}}>
+                        <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          <a href={l.listing_url} target="_blank" rel="noreferrer"
+                            style={{fontWeight:600,color:"var(--accent)",textDecoration:"none"}}>
+                            {l.title}
+                          </a>
                         </div>
                       </td>
+                      <td style={{...TD,textAlign:"right",fontWeight:700,fontSize:14,
+                        color:"var(--text)",whiteSpace:"nowrap",
+                        fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
+                        {fmtPrice(l.price)}
+                      </td>
+                      <td style={{...TD,whiteSpace:"nowrap"}}>
+                        <ClassBadge cls={l.classification} />
+                      </td>
+                      <td style={{...TD,whiteSpace:"nowrap"}}>
+                        <SourceChip name={l.source_name} />
+                      </td>
+                      <td className="hide-mobile" style={{...TD,color:"var(--text2)",whiteSpace:"nowrap"}}>
+                        {l.location_text||"—"}
+                      </td>
+                      <td className="hide-mobile" style={{...TD,color:"var(--muted)",whiteSpace:"nowrap",fontSize:12}}>
+                        {fmtDate(l.listed_at)}
+                      </td>
                     </tr>
-
-                    {/* Listing rows */}
-                    {[...confirmed, ...possible].map((l, ri) => (
-                      <tr key={`${l.id}-${l.search_id}`}
-                        style={{borderTop:"1px solid var(--border)",
-                          background: ri%2===0 ? "var(--surface)" : "var(--surface2)"}}>
-                        <td style={{...TD,maxWidth:0}}>
-                          <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            <a href={l.listing_url} target="_blank" rel="noreferrer"
-                              style={{fontWeight:600,color:"var(--accent)",textDecoration:"none"}}>
-                              {l.title}
-                            </a>
-                          </div>
-                        </td>
-                        <td style={{...TD,textAlign:"right",fontWeight:700,fontSize:14,
-                          color:"var(--text)",whiteSpace:"nowrap",
-                          fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
-                          {fmtPrice(l.price)}
-                        </td>
-                        <td style={{...TD,whiteSpace:"nowrap"}}>
-                          <ClassBadge cls={l.classification} />
-                        </td>
-                        <td style={{...TD,whiteSpace:"nowrap"}}>
-                          <SourceChip name={l.source_name} />
-                        </td>
-                        <td className="hide-mobile" style={{...TD,color:"var(--text2)",whiteSpace:"nowrap"}}>
-                          {l.location_text||"—"}
-                        </td>
-                        <td className="hide-mobile" style={{...TD,color:"var(--muted)",whiteSpace:"nowrap",fontSize:12}}>
-                          {fmtDate(l.listed_at)}
-                        </td>
-                      </tr>
-                    ))}
-
-                    {/* Empty state row */}
-                    {searchListings.length === 0 && (
-                      <tr>
-                        <td colSpan={6} style={{...TD,color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>
-                          No matches yet
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                );
-              })}
-            </table>
-          </div>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
     </div>
@@ -720,11 +662,23 @@ function StatusView() {
 
 /* ─── App shell ──────────────────────────────────────────────── */
 function App() {
-  const [tab, setTab]           = useState("searches");
-  const [toast, setToast]       = useState(null);
+  const [searches, setSearches]   = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [section, setSection]     = useState("search"); // "search" | "history" | "status"
+  const [modal, setModal]         = useState(null);
+  const [toast, setToast]         = useState(null);
   const [schedulerOn, setSchedOn] = useState(false);
 
+  function reloadSearches() {
+    API("/api/searches").then(s => {
+      setSearches(s);
+      // Auto-select first search if none chosen yet
+      setSelectedId(prev => prev ?? (s[0]?.id ?? null));
+    });
+  }
+
   useEffect(() => {
+    reloadSearches();
     API("/api/status").then(d => setSchedOn(d?.scheduler?.running)).catch(()=>{});
   }, []);
 
@@ -732,73 +686,176 @@ function App() {
     setToast({msg:"Scanning…", type:"info"});
     try {
       const r = await fetch(`/api/searches/${searchId}/check`,{method:"POST"}).then(r=>r.json());
-      if (r.ok) setToast({msg:`Done — ${r.results} results, ${r.matches} matches`, type:"success"});
-      else      setToast({msg:r.error||"Scan failed", type:"error"});
+      if (r.ok) {
+        setToast({msg:`Done — ${r.results} results, ${r.matches} matches`, type:"success"});
+        reloadSearches();
+      } else {
+        setToast({msg:r.error||"Scan failed", type:"error"});
+      }
     } catch {
       setToast({msg:"Network error", type:"error"});
     }
     setTimeout(() => setToast(null), 4500);
   }
 
-  const NAV = [
-    {id:"searches", label:"Watchlist"},
-    {id:"history",  label:"History"},
-    {id:"status",   label:"Status"},
-  ];
+  async function saveSearch(payload) {
+    if (modal && modal.id) {
+      await fetch(`/api/searches/${modal.id}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    } else {
+      const r = await fetch("/api/searches",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then(r=>r.json());
+      if (r.id) { setSelectedId(r.id); setSection("search"); }
+    }
+    setModal(null);
+    reloadSearches();
+  }
 
+  async function deleteSearch(id) {
+    if (!confirm("Delete this saved search?")) return;
+    await fetch(`/api/searches/${id}`, {method:"DELETE"});
+    setSelectedId(prev => {
+      if (prev !== id) return prev;
+      const remaining = searches.filter(s => s.id !== id);
+      return remaining[0]?.id ?? null;
+    });
+    reloadSearches();
+  }
+
+  async function toggleSearch(s) {
+    await fetch(`/api/searches/${s.id}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!s.enabled})});
+    reloadSearches();
+  }
+
+  function editForm(s) {
+    return {
+      name:s.name, enabled:s.enabled, notify_email:s.notify_email,
+      keywords:(s.keywords||[]).join(", "),
+      keyword_alts:(s.keyword_alts||[]).join(", "),
+      exclude_keywords:(s.exclude_keywords||[]).join(", "),
+      price_min:s.price_min??"", price_max:s.price_max??"",
+      center_label:s.center_label, center_lat:s.center_lat, center_lon:s.center_lon,
+      radius_miles:s.radius_miles,
+    };
+  }
+
+  const selectedSearch = searches.find(s => s.id === selectedId);
   const toastBg = {info:"var(--accent)", success:"#15803d", error:"var(--red)"};
 
   return (
-    <div>
-      {/* ── Header ── */}
-      <div className="ma-header" style={{background:"var(--header)",position:"sticky",top:0,zIndex:100,
-        display:"flex",alignItems:"center",justifyContent:"space-between",
-        padding:"0 24px",height:56,boxShadow:"0 1px 0 rgba(255,255,255,0.05),0 2px 8px rgba(0,0,0,0.3)"}}>
+    <div style={{display:"flex",flexDirection:"column",minHeight:"100vh"}}>
+      {modal !== null && (
+        <SearchModal initial={modal==="new"?null:editForm(modal)} onSave={saveSearch} onClose={()=>setModal(null)} />
+      )}
 
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <div style={{
-            width:9,height:9,borderRadius:"50%",flexShrink:0,
-            background: schedulerOn ? "#4ade80" : "#475569",
-            animation: schedulerOn ? "pulse-dot 2.2s ease-in-out infinite" : "none",
-          }} />
-          <span style={{fontWeight:700,fontSize:14.5,color:"#f8fafc",letterSpacing:"-0.02em",userSelect:"none"}}>
-            Marketplace Alerts
-          </span>
-        </div>
-
-        <nav className="ma-nav" style={{display:"flex",gap:1}}>
-          {NAV.map(n => (
-            <button key={n.id} onClick={()=>setTab(n.id)} style={{
-              background: tab===n.id ? "rgba(99,102,241,0.25)" : "transparent",
-              color: tab===n.id ? "#a5b4fc" : "#64748b",
-              border:"none", padding:"6px 15px", borderRadius:7,
-              cursor:"pointer", fontSize:13, fontWeight: tab===n.id ? 600 : 500,
-              transition:"background 0.15s, color 0.15s",
-            }}>
-              {n.label}
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      {/* ── Toast ── */}
       {toast && (
-        <div style={{
-          position:"fixed",top:68,right:20,
+        <div style={{position:"fixed",top:62,right:20,
           background:toastBg[toast.type]||"var(--accent)",color:"#fff",
           padding:"10px 18px",borderRadius:10,fontWeight:600,fontSize:13,
           zIndex:2000,boxShadow:"0 4px 20px rgba(0,0,0,0.25)",
-          animation:"slide-in 0.18s ease-out",
-        }}>
+          animation:"slide-in 0.18s ease-out"}}>
           {toast.msg}
         </div>
       )}
 
-      {/* ── Main ── */}
-      <div className="ma-main" style={{maxWidth:960,margin:"0 auto",padding:"26px 20px"}}>
-        {tab==="searches" && <SearchesView onCheckNow={checkNow} />}
-        {tab==="history"  && <HistoryView />}
-        {tab==="status"   && <StatusView />}
+      {/* ── Header ── */}
+      <div className="ma-header" style={{background:"var(--header)",position:"sticky",top:0,zIndex:100,
+        display:"flex",alignItems:"center",justifyContent:"space-between",
+        padding:"0 20px",height:50,
+        boxShadow:"0 1px 0 rgba(255,255,255,0.05),0 2px 8px rgba(0,0,0,0.3)",flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:9}}>
+          <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,
+            background:schedulerOn?"#4ade80":"#475569",
+            animation:schedulerOn?"pulse-dot 2.2s ease-in-out infinite":"none"}} />
+          <span style={{fontWeight:700,fontSize:14,color:"#f8fafc",letterSpacing:"-0.02em",userSelect:"none"}}>
+            Marketplace Alerts
+          </span>
+        </div>
+        <div style={{display:"flex",gap:3}}>
+          {[{id:"history",label:"History"},{id:"status",label:"Status"}].map(n => (
+            <button key={n.id} onClick={()=>setSection(n.id)} style={{
+              background:section===n.id?"rgba(99,102,241,0.25)":"transparent",
+              color:section===n.id?"#a5b4fc":"#64748b",
+              border:"none",padding:"5px 13px",borderRadius:6,
+              cursor:"pointer",fontSize:13,fontWeight:section===n.id?600:500,
+              transition:"background 0.15s,color 0.15s"}}>
+              {n.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Body ── */}
+      <div className="ma-body" style={{display:"flex",flex:1,alignItems:"flex-start"}}>
+
+        {/* Sidebar */}
+        <div className="ma-sidebar" style={{
+          width:210,flexShrink:0,padding:"14px 10px",
+          borderRight:"1px solid var(--border)",
+          minHeight:"calc(100vh - 50px)",
+          position:"sticky",top:50,
+          background:"var(--surface)",
+          display:"flex",flexDirection:"column",gap:2}}>
+
+          <div className="ma-sidebar-label" style={{fontSize:10,fontWeight:700,color:"var(--muted)",
+            letterSpacing:"0.08em",textTransform:"uppercase",padding:"2px 8px 8px"}}>
+            Searches
+          </div>
+
+          {searches.map(s => {
+            const isActive = section === "search" && selectedId === s.id;
+            return (
+              <button key={s.id} onClick={() => { setSelectedId(s.id); setSection("search"); }} style={{
+                width:"100%",textAlign:"left",padding:"8px 10px",borderRadius:7,
+                background:isActive?"rgba(99,102,241,0.12)":"transparent",
+                border:isActive?"1px solid rgba(99,102,241,0.3)":"1px solid transparent",
+                cursor:"pointer",transition:"background 0.12s",flexShrink:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <div style={{width:6,height:6,borderRadius:"50%",flexShrink:0,
+                    background:s.enabled?"var(--green)":"var(--border2)"}} />
+                  <span style={{fontSize:12.5,fontWeight:isActive?600:500,
+                    color:isActive?"var(--accent)":"var(--text)",
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,
+                    minWidth:0}}>
+                    {s.name}
+                  </span>
+                  {s.match_count > 0 && (
+                    <span style={{fontSize:10,fontWeight:700,color:"var(--green)",
+                      background:"var(--green-bg)",border:"1px solid var(--green-br)",
+                      borderRadius:999,padding:"1px 6px",flexShrink:0,lineHeight:1.6}}>
+                      {s.match_count}
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+
+          <button className="ma-sidebar-add" onClick={() => setModal("new")} style={{
+            width:"100%",textAlign:"left",padding:"7px 10px",borderRadius:7,marginTop:4,
+            background:"transparent",border:"1.5px dashed var(--border2)",
+            cursor:"pointer",color:"var(--muted)",fontSize:12,fontWeight:500,
+            display:"flex",alignItems:"center",gap:5}}>
+            <span style={{fontSize:15,lineHeight:1}}>+</span> Add search
+          </button>
+        </div>
+
+        {/* Main content */}
+        <div className="ma-main" style={{flex:1,padding:"22px 22px",minWidth:0}}>
+          {section === "search" && (
+            selectedSearch
+              ? <SearchDetailView
+                  key={selectedSearch.id}
+                  search={selectedSearch}
+                  onCheckNow={checkNow}
+                  onEdit={s => setModal(s)}
+                  onDelete={deleteSearch}
+                  onToggle={toggleSearch}
+                />
+              : <EmptyState icon="◎" title="Nothing on your watchlist"
+                  sub="Add a saved search to start monitoring marketplaces for deals." />
+          )}
+          {section === "history" && <HistoryView />}
+          {section === "status"  && <StatusView />}
+        </div>
       </div>
     </div>
   );
