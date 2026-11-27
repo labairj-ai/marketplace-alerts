@@ -14,6 +14,7 @@
     "express": "^4.19.2",
     "imapflow": "^1.0.162",
     "node-cron": "^3.0.3",
-    "nodemailer": "^6.9.14"
+    "nodemailer": "^6.9.14",
+    "playwright": "^1.65.1"
   }
 }

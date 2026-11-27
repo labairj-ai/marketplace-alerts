@@ -1,54 +1,165 @@
 "use strict";
 
-/**
- * Facebook Marketplace Provider
- *
- * Meta does not provide a public Facebook Marketplace search API for
- * consumer use. The Meta Content Library API requires academic research
- * credentials and does not cover consumer Marketplace listings. No
- * authorized third-party provider offering real-time Marketplace search
- * has been verified as of 2026.
- *
- * This adapter holds the AUTHORIZATION_REQUIRED status until an
- * authorized provider is configured and verified.
- *
- * To add a provider:
- * 1. Verify their Terms of Service permit automated Marketplace search.
- * 2. Obtain an API key and store it in FACEBOOK_PROVIDER_KEY in .env.
- * 3. Set FACEBOOK_PROVIDER_URL to their endpoint.
- * 4. Implement search() and normalize() below.
- */
+const { chromium } = require("playwright");
+const path = require("path");
+const fs = require("fs");
+
+const SESSION_FILE =
+  process.env.FB_SESSION_FILE ||
+  path.join(__dirname, "../../fb_session.json");
+
+// --- listing data extraction ---
+
+function extractPrice(spans) {
+  for (const span of spans) {
+    // Handle "$1,200$1,350" (current$original) or plain "$850"
+    const m = span.match(/^\$\s*([\d,]+)/);
+    if (m) {
+      const n = parseFloat(m[1].replace(/,/g, ""));
+      if (n > 0 && n < 1_000_000) return n;
+    }
+  }
+  return null;
+}
+
+function extractTitle(spans) {
+  // Longest span that isn't just a price
+  const candidates = spans.filter(s => s.length > 10 && !/^\$[\d,]+/.test(s));
+  return candidates[0] || spans[spans.length - 1] || null;
+}
+
+function extractLocation(imgAlt) {
+  if (!imgAlt) return null;
+  // "... in City, ST" at end of alt text
+  const m = imgAlt.match(/ in ([A-Za-z][A-Za-z\s]+,\s*[A-Z]{2})$/);
+  if (m) return m[1].trim();
+  if (imgAlt.includes("Ships to you")) return "Ships to you";
+  return null;
+}
+
+// --- provider ---
+
 class FacebookMarketplaceProvider {
   constructor() {
     this.slug = "facebook_marketplace";
     this.name = "Facebook Marketplace";
+    this._lastCheck = null;
+    this._lastError = null;
+  }
+
+  _hasSession() {
+    return fs.existsSync(SESSION_FILE);
   }
 
   async validateAccess() {
-    return {
-      ok: false,
-      status: "AUTHORIZATION_REQUIRED",
-      message:
-        "No authorized Facebook Marketplace search API is currently configured. " +
-        "Meta does not provide a public consumer Marketplace API. " +
-        "Contact an authorized data provider to obtain access.",
-    };
+    if (!this._hasSession()) {
+      return {
+        ok: false,
+        status: "AUTHORIZATION_REQUIRED",
+        message: "No Facebook session. Run: node scripts/fb-auth-setup.js",
+      };
+    }
+    return { ok: true, status: "LIVE" };
   }
 
-  async search() {
-    throw new Error("AUTHORIZATION_REQUIRED: No authorized Facebook Marketplace provider configured.");
+  async search({ keywords = [] } = {}) {
+    if (!this._hasSession()) {
+      throw new Error("AUTHORIZATION_REQUIRED: No Facebook session file. Run: node scripts/fb-auth-setup.js");
+    }
+
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    try {
+      const context = await browser.newContext({
+        storageState: SESSION_FILE,
+        userAgent:
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      });
+      const page = await context.newPage();
+
+      // Search with the first keyword — most specific, reduces result noise
+      const keyword = keywords[0] || "";
+      const url =
+        `https://www.facebook.com/marketplace/search/` +
+        `?query=${encodeURIComponent(keyword)}` +
+        `&latitude=39.1031&longitude=-84.5120&radius=100&daysSinceListed=7`;
+
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      // Wait for JS-rendered listing cards
+      await page.waitForTimeout(4000);
+
+      const items = await page.$$eval(
+        'a[href*="/marketplace/item/"]',
+        anchors =>
+          anchors.map(a => {
+            const id = (a.href.match(/\/marketplace\/item\/(\d+)/) || [])[1];
+            const spans = [...a.querySelectorAll("span")]
+              .map(s => s.textContent.trim())
+              .filter(s => s.length > 0 && s.length < 300);
+            const img = a.querySelector("img");
+            return { id, spans: spans.slice(0, 8), imgAlt: img ? img.alt : null };
+          }).filter(x => x.id)
+      );
+
+      const seen = new Set();
+      const listings = [];
+
+      for (const item of items) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+
+        const price    = extractPrice(item.spans);
+        const title    = extractTitle(item.spans);
+        const location = extractLocation(item.imgAlt);
+
+        if (!title) continue;
+
+        listings.push({
+          source:       "facebook_marketplace",
+          listingId:    item.id,
+          title,
+          description:  null,
+          price,
+          currency:     "USD",
+          locationText: location,
+          latitude:     null,
+          longitude:    null,
+          imageUrl:     null,
+          listingUrl:   `https://www.facebook.com/marketplace/item/${item.id}/`,
+          listedAt:     null,
+          discoveredAt: new Date().toISOString(),
+          raw:          { fb: true },
+        });
+      }
+
+      this._lastCheck = new Date().toISOString();
+      this._lastError = null;
+      return listings;
+    } catch (err) {
+      this._lastError = err.message;
+      throw err;
+    } finally {
+      await browser.close();
+    }
   }
 
   async normalize(raw) { return raw; }
 
   async getStatus() {
-    return {
-      status: "AUTHORIZATION_REQUIRED",
-      lastCheck: null,
-      error:
-        "Meta does not provide a public consumer Marketplace search API. " +
-        "No authorized third-party provider is configured.",
-    };
+    if (!this._hasSession()) {
+      return {
+        status: "AUTHORIZATION_REQUIRED",
+        lastCheck: null,
+        error: "No FB session. Run: node scripts/fb-auth-setup.js",
+      };
+    }
+    if (this._lastError) {
+      return { status: "ERROR", lastCheck: this._lastCheck, error: this._lastError };
+    }
+    return { status: "LIVE", lastCheck: this._lastCheck, error: null };
   }
 }
 
