@@ -73,19 +73,26 @@ class FacebookMarketplaceProvider {
     });
 
     try {
+      // Cincinnati center coords (used for geo context + URL params)
+      const lat = 39.1031;
+      const lon = -84.5120;
+
       const context = await browser.newContext({
         storageState: SESSION_FILE,
         userAgent:
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        geolocation: { latitude: lat, longitude: lon },
+        permissions: ["geolocation"],
       });
       const page = await context.newPage();
 
       // Search with the first keyword — most specific, reduces result noise
       const keyword = keywords[0] || "";
+      // 113407735336754 = Cincinnati marketplace city ID (from FB's own redirect)
       const url =
-        `https://www.facebook.com/marketplace/search/` +
+        `https://www.facebook.com/marketplace/113407735336754/search/` +
         `?query=${encodeURIComponent(keyword)}` +
-        `&latitude=39.1031&longitude=-84.5120&radius=100&daysSinceListed=7`;
+        `&latitude=${lat}&longitude=${lon}&radius=100&daysSinceListed=7`;
 
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
       // Wait for JS-rendered listing cards

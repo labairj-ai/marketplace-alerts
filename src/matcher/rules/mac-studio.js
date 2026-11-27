@@ -11,6 +11,9 @@ const RAM_PATTERN = /\b(\d+)\s*(?:gb|g)\b/gi;
 // Listings that mention these are definitely rejected
 const REJECT_EXACT = [
   "studio display",        // Apple display, not the Mac
+  "retina lcd display",    // display panel, not the Mac
+  "studio fix",            // MAC Studio Fix makeup
+  "conceal and correct",   // makeup product
   "macbook pro",
   "macbook air",
   "macbook",
@@ -26,6 +29,8 @@ const REJECT_EXACT = [
   "for parts",
   "parts only",
   "broken",
+  "ssd only",              // storage drive listing, not complete computer
+  "for mac studio",        // accessory for the Mac Studio, not the Mac
 ];
 
 function extractRamGb(text) {
