@@ -12,31 +12,44 @@ const SESSION_FILE =
 
 // --- listing data extraction ---
 
-function extractPrice(spans) {
+// imgAlt format: "Product Title in City, ST"  or  "Product Title Ships to you"
+// ariaLabel format: "[badge, ]Product Title, $price, City, ST, listing XXXXXX"
+// Use imgAlt as the primary source — it's the cleanest single field for title+location.
+function parseCard(imgAlt, ariaLabel, spans) {
+  let title = null;
+  let location = null;
+  let price = null;
+
+  // imgAlt: "Product name in City, ST"
+  if (imgAlt) {
+    if (imgAlt.includes("Ships to you")) {
+      location = "Ships to you";
+      title = imgAlt.replace(/\s*Ships to you\s*$/i, "").trim() || null;
+    } else {
+      const m = imgAlt.match(/^(.+?) in ([A-Za-z][\w\s\-]+,\s*[A-Z]{2})$/);
+      if (m) { title = m[1].trim(); location = m[2].trim(); }
+      else { title = imgAlt.trim(); }
+    }
+  }
+
+  // Price from spans (most reliable source)
   for (const span of spans) {
-    // Handle "$1,200$1,350" (current$original) or plain "$850"
     const m = span.match(/^\$\s*([\d,]+)/);
     if (m) {
       const n = parseFloat(m[1].replace(/,/g, ""));
-      if (n > 0 && n < 1_000_000) return n;
+      if (n > 0 && n < 1_000_000) { price = n; break; }
     }
   }
-  return null;
-}
 
-function extractTitle(spans) {
-  // Longest span that isn't just a price
-  const candidates = spans.filter(s => s.length > 10 && !/^\$[\d,]+/.test(s));
-  return candidates[0] || spans[spans.length - 1] || null;
-}
+  // Fall back to ariaLabel for title if imgAlt didn't give one
+  if (!title && ariaLabel) {
+    // "Just listed, Title, $600, City ST, listing XXXXXX"
+    const parts = ariaLabel.split(", ");
+    const titleIdx = parts.findIndex(p => !/^(\$[\d,]+|listing \d+|Just listed|New listing)$/i.test(p) && p.length > 5);
+    if (titleIdx >= 0) title = parts[titleIdx];
+  }
 
-function extractLocation(imgAlt) {
-  if (!imgAlt) return null;
-  // "... in City, ST" at end of alt text
-  const m = imgAlt.match(/ in ([A-Za-z][A-Za-z\s]+,\s*[A-Z]{2})$/);
-  if (m) return m[1].trim();
-  if (imgAlt.includes("Ships to you")) return "Ships to you";
-  return null;
+  return { title, location, price };
 }
 
 // --- provider ---
@@ -97,12 +110,20 @@ class FacebookMarketplaceProvider {
         `&latitude=${lat}&longitude=${lon}&radius=100`;
 
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      // Wait for initial render, then scroll to trigger lazy-loaded cards
       await page.waitForTimeout(3000);
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await page.waitForTimeout(2000);
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await page.waitForTimeout(1500);
+
+      // Keep scrolling to the last card until no new ones appear (up to ~8 rounds)
+      let prevCount = 0;
+      for (let i = 0; i < 8; i++) {
+        const count = await page.$$eval('a[href*="/marketplace/item/"]', els => els.length);
+        if (count === prevCount) break;
+        prevCount = count;
+        await page.evaluate(() => {
+          const cards = document.querySelectorAll('a[href*="/marketplace/item/"]');
+          if (cards.length) cards[cards.length - 1].scrollIntoView();
+        });
+        await page.waitForTimeout(2000);
+      }
 
       const items = await page.$$eval(
         'a[href*="/marketplace/item/"]',
@@ -113,7 +134,12 @@ class FacebookMarketplaceProvider {
               .map(s => s.textContent.trim())
               .filter(s => s.length > 0 && s.length < 300);
             const img = a.querySelector("img");
-            return { id, spans: spans.slice(0, 8), imgAlt: img ? img.alt : null };
+            return {
+              id,
+              spans: spans.slice(0, 10),
+              imgAlt: img ? img.alt : null,
+              ariaLabel: a.getAttribute("aria-label"),
+            };
           }).filter(x => x.id)
       );
 
@@ -129,9 +155,7 @@ class FacebookMarketplaceProvider {
         if (seen.has(item.id)) continue;
         seen.add(item.id);
 
-        const price    = extractPrice(item.spans);
-        const title    = extractTitle(item.spans);
-        const location = extractLocation(item.imgAlt);
+        const { title, location, price } = parseCard(item.imgAlt, item.ariaLabel, item.spans);
 
         if (!title) continue;
         if (location === "Ships to you") continue;

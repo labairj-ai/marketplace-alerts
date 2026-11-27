@@ -22,6 +22,13 @@ app.use(express.static(path.join(__dirname, "public"), {
   },
 }));
 
+function inferProductTypeFromKeywords(keywords) {
+  const kws = JSON.stringify(keywords).toLowerCase();
+  if (kws.includes("mac studio")) return "mac_studio";
+  if (kws.includes("qidi")) return "qidi_printer";
+  return null;
+}
+
 // ─── Health ──────────────────────────────────────────────────────────────────
 
 app.get("/api/health", (req, res) => {
@@ -133,7 +140,8 @@ app.put("/api/searches/:id", (req, res) => {
     b.enabled !== undefined ? (b.enabled ? 1 : 0) : existing.enabled,
     JSON.stringify(b.keywords ?? safeJson(existing.keywords, [])),
     JSON.stringify(b.keyword_alts ?? safeJson(existing.keyword_alts, [])),
-    b.brand ?? existing.brand, b.product_type ?? existing.product_type,
+    b.brand ?? existing.brand,
+    inferProductTypeFromKeywords(b.keywords ?? safeJson(existing.keywords, [])),
     JSON.stringify(b.specs ?? safeJson(existing.specs, {})),
     b.price_min ?? existing.price_min, b.price_max ?? existing.price_max,
     b.center_lat ?? existing.center_lat, b.center_lon ?? existing.center_lon,
