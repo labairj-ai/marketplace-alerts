@@ -212,6 +212,24 @@ function SegmentedControl({ options, value, onChange }) {
   );
 }
 
+/* ─── Source chip ────────────────────────────────────────────── */
+const SOURCE_META = {
+  craigslist:           { label:"CL",    bg:"#fff7ed", color:"#c2410c", border:"#fed7aa" },
+  facebook_marketplace: { label:"FB",    bg:"#eff6ff", color:"#1d4ed8", border:"#bfdbfe" },
+  fixture:              { label:"Demo",  bg:"var(--surface2)", color:"var(--muted)", border:"var(--border2)" },
+};
+function SourceChip({ name }) {
+  const slug = (name||"").toLowerCase().replace(/\s+/g,"_");
+  const m = SOURCE_META[slug] || { label: name||"?", bg:"var(--surface2)", color:"var(--muted)", border:"var(--border2)" };
+  return (
+    <span style={{background:m.bg,color:m.color,border:`1px solid ${m.border}`,
+      borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700,
+      letterSpacing:"0.02em",display:"inline-block"}}>
+      {m.label}
+    </span>
+  );
+}
+
 /* ─── Table helpers ──────────────────────────────────────────── */
 const TH = {
   padding:"9px 14px", textAlign:"left", fontSize:11, fontWeight:600,
@@ -520,11 +538,11 @@ function ListingsView() {
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                     <thead>
                       <tr style={{background:"var(--surface2)"}}>
-                        <th style={{...TH, width:"40%"}}>Title</th>
+                        <th style={{...TH, width:"38%"}}>Title</th>
                         <th style={{...TH, textAlign:"right"}}>Price</th>
+                        <th style={{...TH}}>Source</th>
                         <th style={{...TH}} className="hide-mobile">Location</th>
-                        <th style={{...TH}} className="hide-mobile">Source</th>
-                        <th style={{...TH}} className="hide-mobile">Search</th>
+                        <th style={{...TH}} className="hide-mobile">Listed</th>
                         <th style={{...TH}} className="hide-mobile">Found</th>
                         <th style={{...TH}}></th>
                       </tr>
@@ -556,15 +574,14 @@ function ListingsView() {
                             fontVariantNumeric:"tabular-nums", letterSpacing:"-0.02em"}}>
                             {fmtPrice(l.price)}
                           </td>
+                          <td style={{...TD, whiteSpace:"nowrap"}}>
+                            <SourceChip name={l.source_name} />
+                          </td>
                           <td className="hide-mobile" style={{...TD, color:"var(--text2)", whiteSpace:"nowrap"}}>
                             {l.location_text||"—"}
                           </td>
-                          <td className="hide-mobile" style={{...TD, color:"var(--text2)", whiteSpace:"nowrap"}}>
-                            {l.source_name}
-                          </td>
-                          <td className="hide-mobile" style={{...TD, color:"var(--text2)", whiteSpace:"nowrap",
-                            maxWidth:140, overflow:"hidden", textOverflow:"ellipsis"}}>
-                            {l.search_name}
+                          <td className="hide-mobile" style={{...TD, color:"var(--muted)", whiteSpace:"nowrap"}}>
+                            {l.listed_at ? new Date(l.listed_at).toLocaleDateString() : "—"}
                           </td>
                           <td className="hide-mobile" style={{...TD, color:"var(--muted)", whiteSpace:"nowrap"}}>
                             {fmtDate(l.first_matched)}
