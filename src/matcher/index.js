@@ -37,8 +37,8 @@ function matchListing(listing, search) {
     // cannot be used for qualification (any listing fetched by query "X" has "X"
     // in description, so combined always self-matches).
     const titleLower = listing.title.toLowerCase().replace(/-/g, "");
-    const primaryInTitle = keywords.some(kw => titleLower.includes(kw.toLowerCase().replace(/-/g, "")));
-    const altInTitle     = alts.some(kw => titleLower.includes(kw.toLowerCase().replace(/-/g, "")));
+    const primaryInTitle = keywords.some(kw => titleMatchesKeyword(kw, titleLower));
+    const altInTitle     = alts.some(kw => titleMatchesKeyword(kw, titleLower));
 
     if (!primaryInTitle && !altInTitle) {
       return result("REJECTED", ["No primary or alternate keywords matched listing title"], listing, search);
@@ -65,6 +65,20 @@ function matchListing(listing, search) {
 
   const geoResult = applyGeo(listing, search);
   return mergeResult({ classification: "CONFIRMED", reasons }, geoResult, listing, search);
+}
+
+// Check if a keyword matches a listing title.
+// For 3+ word phrases (e.g. "Little Tikes Trampoline"), require every word (3+ chars)
+// to appear in the title rather than the exact substring — the title may have words
+// interspersed ("Little Tikes 3ft Trampoline"). For 1-2 word terms, exact substring.
+function titleMatchesKeyword(kw, titleLower) {
+  const kwNorm = kw.toLowerCase().replace(/-/g, "");
+  if (titleLower.includes(kwNorm)) return true;
+  const words = kwNorm.split(/\s+/).filter(w => w.length >= 3);
+  if (words.length >= 3) {
+    return words.every(w => titleLower.includes(w));
+  }
+  return false;
 }
 
 function inferProductType(search) {

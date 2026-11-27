@@ -45,9 +45,19 @@ class CraigslistProvider {
   async search({ keywords = [] } = {}) {
     if (!keywords.length) return [];
 
+    // For 3+ word phrases like "Little Tikes Trampoline", CL often returns 0 for the
+    // exact phrase but does have results for the product word ("trampoline").
+    // Expand to also search the last word of each long phrase.
+    const searchQueries = [...new Set([
+      ...keywords,
+      ...keywords
+        .filter(kw => kw.trim().split(/\s+/).length >= 3)
+        .map(kw => kw.trim().split(/\s+/).pop()),
+    ])];
+
     // Fire all keyword×market combinations in parallel — each is an independent
     // HTTP request with no shared state. Dedup by PostingID after collecting.
-    const pairs = keywords.flatMap(query => MARKETS.map(market => ({ query, market })));
+    const pairs = searchQueries.flatMap(query => MARKETS.map(market => ({ query, market })));
 
     const allResults = await Promise.all(pairs.map(async ({ query, market }) => {
       try {

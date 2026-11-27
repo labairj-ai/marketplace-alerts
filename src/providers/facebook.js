@@ -193,7 +193,8 @@ class FacebookMarketplaceProvider {
       const keywordsToSearch = keywords.length > 0 ? keywords : [""];
 
       // Each keyword gets its own tab — all load and scroll in parallel.
-      const perKeywordItems = await Promise.all(keywordsToSearch.map(async keyword => {
+      // Use allSettled so one tab crashing doesn't close the browser under other tabs.
+      const perKeywordSettled = await Promise.allSettled(keywordsToSearch.map(async keyword => {
         const page = await context.newPage();
         try {
           const url =
@@ -217,7 +218,10 @@ class FacebookMarketplaceProvider {
             await page.waitForTimeout(1200);
           }
 
-          return page.$$eval(
+          // Must await before finally closes the page — returning an un-awaited
+          // Promise from a try/finally causes the finally to run before $$eval
+          // resolves, closing the page mid-flight.
+          const items = await page.$$eval(
             'a[href*="/marketplace/item/"]',
             anchors => anchors.map(a => {
               const id = (a.href.match(/\/marketplace\/item\/(\d+)/) || [])[1];
@@ -233,10 +237,14 @@ class FacebookMarketplaceProvider {
               };
             }).filter(x => x.id)
           );
+          return items;
         } finally {
-          await page.close();
+          await page.close().catch(() => {});
         }
       }));
+      const perKeywordItems = perKeywordSettled
+        .filter(r => r.status === "fulfilled")
+        .map(r => r.value);
 
       // Merge and deduplicate across all keyword tabs
       const itemsSeen = new Set();
@@ -272,10 +280,10 @@ class FacebookMarketplaceProvider {
         } else {
           // Nominatim failed — try city-center lookup as a fallback
           const cityKey = Object.keys(CITY_CENTERS).find(k => location.toLowerCase().includes(k));
-          if (!cityKey) return null; // unknown location, can't verify → reject
+          if (!cityKey) return null;
           const city = CITY_CENTERS[cityKey];
           const distMiles = haversine(centerLat, centerLon, city.lat, city.lon);
-          if (distMiles > radiusMiles) return null; // city center out of range → reject
+          if (distMiles > radiusMiles) return null;
           // City center is in range — let through, lat/lon stay null
         }
 
