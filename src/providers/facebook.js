@@ -3,63 +3,12 @@
 const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
+const { geocodeLocation } = require("../geo/geocoder");
+const { haversine } = require("../geo");
 
 const SESSION_FILE =
   process.env.FB_SESSION_FILE ||
   path.join(__dirname, "../../fb_session.json");
-
-// --- geo helpers ---
-
-function haversineKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-// Approximate coords for cities within/near the search area.
-// If a city isn't listed here it will be rejected — safer than a broad state fallback.
-const CITY_COORDS = {
-  // Greater Cincinnati / SW Ohio
-  "cincinnati":  [39.1031, -84.5120], "hamilton":    [39.3995, -84.5613],
-  "middletown":  [39.5151, -84.3983], "mason":       [39.3598, -84.3099],
-  "west chester":[39.3612, -84.4113], "fairfield":   [39.3459, -84.5338],
-  "loveland":    [39.2687, -84.2638], "blue ash":    [39.2320, -84.3785],
-  "springdale":  [39.2887, -84.4857], "florence":    [38.9989, -84.6271],
-  // Northern KY
-  "covington":   [39.0837, -84.5085], "newport":     [39.0920, -84.4958],
-  "florence ky": [38.9989, -84.6271], "erlanger":    [39.0137, -84.5996],
-  "ft mitchell": [39.0623, -84.5538], "fort mitchell":[39.0623,-84.5538],
-  // Dayton area
-  "dayton":      [39.7589, -84.1916], "kettering":   [39.6884, -84.1688],
-  "springfield": [39.9242, -83.8088], "xenia":       [39.6845, -83.9274],
-  "miamisburg":  [39.6428, -84.2888], "huber heights":[39.8428,-84.1244],
-  // KY
-  "lexington":   [38.0406, -84.5037], "frankfort":   [38.2009, -84.8733],
-  "georgetown":  [38.2098, -84.5588], "richmond ky": [37.7479, -84.2947],
-  "louisville":  [38.2527, -85.7585],
-  // SE Indiana (within ~80 mi)
-  "richmond":    [39.8284, -84.8902], "connersville":[39.6417,-85.1413],
-  "batesville":  [39.3001, -85.2208],
-  // Columbus area (just inside 100 mi)
-  "columbus":    [39.9612, -82.9988], "chillicothe": [39.3331, -82.9821],
-  "lancaster":   [39.7137, -82.5996], "washington court house":[39.5370,-83.4388],
-};
-
-function cityInRadius(locationText, centerLat, centerLon, radiusMiles) {
-  if (!locationText || locationText === "Ships to you") return false;
-  const lower = locationText.toLowerCase();
-  for (const [city, [lat, lon]] of Object.entries(CITY_COORDS)) {
-    if (lower.includes(city)) {
-      const distKm = haversineKm(centerLat, centerLon, lat, lon);
-      return distKm <= radiusMiles * 1.60934;
-    }
-  }
-  // City not in lookup table — reject rather than guess
-  return false;
-}
 
 // --- listing data extraction ---
 
@@ -181,9 +130,21 @@ class FacebookMarketplaceProvider {
         const location = extractLocation(item.imgAlt);
 
         if (!title) continue;
-
-        // Drop nationwide "Ships to you" listings — FB already geo-filtered the rest
         if (location === "Ships to you") continue;
+
+        // Geocode the location and enforce the saved search radius
+        let latitude = null;
+        let longitude = null;
+        if (location) {
+          const coords = await geocodeLocation(location);
+          if (coords) {
+            const distMiles = haversine(centerLat, centerLon, coords.lat, coords.lon);
+            if (distMiles > radiusMiles) continue;
+            latitude  = coords.lat;
+            longitude = coords.lon;
+          }
+          // If geocoding fails, let the listing through — matcher will mark it unverified
+        }
 
         listings.push({
           source:       "facebook_marketplace",
@@ -193,8 +154,8 @@ class FacebookMarketplaceProvider {
           price,
           currency:     "USD",
           locationText: location,
-          latitude:     null,
-          longitude:    null,
+          latitude,
+          longitude,
           imageUrl:     null,
           listingUrl:   `https://www.facebook.com/marketplace/item/${item.id}/`,
           listedAt:     null,
