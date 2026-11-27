@@ -45,56 +45,57 @@ class CraigslistProvider {
   async search({ keywords = [] } = {}) {
     if (!keywords.length) return [];
 
+    // Fire all keyword×market combinations in parallel — each is an independent
+    // HTTP request with no shared state. Dedup by PostingID after collecting.
+    const pairs = keywords.flatMap(query => MARKETS.map(market => ({ query, market })));
+
+    const allResults = await Promise.all(pairs.map(async ({ query, market }) => {
+      try {
+        const url = `https://${market}.craigslist.org/jsonsearch/${SECTION}/?query=${encodeURIComponent(query)}&sort=date`;
+        const res = await fetch(url, {
+          signal: AbortSignal.timeout(10000),
+          headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" },
+        });
+        if (!res.ok) return [];
+
+        const data = await res.json();
+        const items = Array.isArray(data[0]) ? data[0] : (Array.isArray(data) ? data : []);
+
+        return items
+          .filter(item => {
+            const t = (item.PostingTitle || "").toLowerCase();
+            return !(/\b(wanted|wtb|iso\s|in search of|looking for)\b/.test(t));
+          })
+          .map(item => ({
+            source:       "craigslist",
+            listingId:    String(item.PostingID || ""),
+            title:        (item.PostingTitle || "").trim(),
+            description:  query,
+            price:        item.price != null ? Number(item.price) : null,
+            currency:     "USD",
+            locationText: null,
+            latitude:     item.Latitude  != null ? Number(item.Latitude)  : null,
+            longitude:    item.Longitude != null ? Number(item.Longitude) : null,
+            imageUrl:     item.ImageThumb || null,
+            listingUrl:   item.PostingURL || null,
+            listedAt:     item.PostedDate ? new Date(item.PostedDate * 1000).toISOString() : null,
+            discoveredAt: new Date().toISOString(),
+            raw:          { market, cl: true },
+          }))
+          .filter(l => l.listingId);
+      } catch {
+        return [];
+      }
+    }));
+
+    // Deduplicate across all parallel results by PostingID
     const seen = new Set();
     const listings = [];
-
-    // Search every keyword across every market — deduplication by PostingID prevents
-    // double-counting items that appear in results for multiple keyword terms.
-    for (const query of keywords) {
-      for (const market of MARKETS) {
-        try {
-          const url = `https://${market}.craigslist.org/jsonsearch/${SECTION}/?query=${encodeURIComponent(query)}&sort=date`;
-          const res = await fetch(url, {
-            signal: AbortSignal.timeout(10000),
-            headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" },
-          });
-          if (!res.ok) continue;
-
-          const data = await res.json();
-          // Response is [[...listings], metadata] or just [...listings]
-          const items = Array.isArray(data[0]) ? data[0] : (Array.isArray(data) ? data : []);
-
-          for (const item of items) {
-            const id = String(item.PostingID || "");
-            if (!id || seen.has(id)) continue;
-            seen.add(id);
-
-            // Skip "wanted" / request posts — they're not listings for sale
-            const titleCheck = (item.PostingTitle || "").toLowerCase();
-            if (/\b(wanted|wtb|iso\s|in search of|looking for)\b/.test(titleCheck)) continue;
-
-            listings.push({
-              source:       "craigslist",
-              listingId:    id,
-              title:        (item.PostingTitle || "").trim(),
-              // Store the query term so the matcher can confirm keyword presence
-              // even when the brand/model isn't literally in the title (CL matches body too)
-              description:  query,
-              price:        item.price != null ? Number(item.price) : null,
-              currency:     "USD",
-              locationText: null,
-              latitude:     item.Latitude  != null ? Number(item.Latitude)  : null,
-              longitude:    item.Longitude != null ? Number(item.Longitude) : null,
-              imageUrl:     item.ImageThumb || null,
-              listingUrl:   item.PostingURL || null,
-              listedAt:     item.PostedDate ? new Date(item.PostedDate * 1000).toISOString() : null,
-              discoveredAt: new Date().toISOString(),
-              raw:          { market, cl: true },
-            });
-          }
-        } catch {
-          // Skip markets that fail — don't block the whole scan
-        }
+    for (const batch of allResults) {
+      for (const l of batch) {
+        if (seen.has(l.listingId)) continue;
+        seen.add(l.listingId);
+        listings.push(l);
       }
     }
 

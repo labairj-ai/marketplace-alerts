@@ -171,52 +171,47 @@ class FacebookMarketplaceProvider {
     });
 
     try {
-      // Cincinnati center coords (used for geo context + URL params)
       const lat = 39.1031;
       const lon = -84.5120;
+      const UA  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
       const context = await browser.newContext({
         storageState: SESSION_FILE,
-        userAgent:
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        userAgent: UA,
         geolocation: { latitude: lat, longitude: lon },
         permissions: ["geolocation"],
       });
-      const page = await context.newPage();
 
-      // Search all keywords in a single browser session — each keyword gets its own
-      // page load, results are merged and deduplicated by listing ID before processing.
       const keywordsToSearch = keywords.length > 0 ? keywords : [""];
-      const rawItems = [];
-      const itemsSeen = new Set();
 
-      for (const keyword of keywordsToSearch) {
-        // 113407735336754 = Cincinnati marketplace city ID (from FB's own redirect)
-        const url =
-          `https://www.facebook.com/marketplace/113407735336754/search/` +
-          `?query=${encodeURIComponent(keyword)}` +
-          `&latitude=${lat}&longitude=${lon}&radius=100`;
+      // Each keyword gets its own tab — all load and scroll in parallel.
+      const perKeywordItems = await Promise.all(keywordsToSearch.map(async keyword => {
+        const page = await context.newPage();
+        try {
+          const url =
+            `https://www.facebook.com/marketplace/113407735336754/search/` +
+            `?query=${encodeURIComponent(keyword)}` +
+            `&latitude=${lat}&longitude=${lon}&radius=100`;
 
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-        await page.waitForTimeout(3000);
-
-        // Keep scrolling until no new cards appear
-        let prevCount = 0;
-        for (let i = 0; i < 20; i++) {
-          const count = await page.$$eval('a[href*="/marketplace/item/"]', els => els.length);
-          if (count === prevCount) break;
-          prevCount = count;
-          await page.evaluate(() => {
-            const cards = document.querySelectorAll('a[href*="/marketplace/item/"]');
-            if (cards.length) cards[cards.length - 1].scrollIntoView();
-          });
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
           await page.waitForTimeout(2000);
-        }
 
-        const pageItems = await page.$$eval(
-          'a[href*="/marketplace/item/"]',
-          anchors =>
-            anchors.map(a => {
+          // Scroll until no new cards — reduced round cap and wait for speed
+          let prevCount = 0;
+          for (let i = 0; i < 8; i++) {
+            const count = await page.$$eval('a[href*="/marketplace/item/"]', els => els.length);
+            if (count === prevCount) break;
+            prevCount = count;
+            await page.evaluate(() => {
+              const cards = document.querySelectorAll('a[href*="/marketplace/item/"]');
+              if (cards.length) cards[cards.length - 1].scrollIntoView();
+            });
+            await page.waitForTimeout(1200);
+          }
+
+          return page.$$eval(
+            'a[href*="/marketplace/item/"]',
+            anchors => anchors.map(a => {
               const id = (a.href.match(/\/marketplace\/item\/(\d+)/) || [])[1];
               const spans = [...a.querySelectorAll("span")]
                 .map(s => s.textContent.trim())
@@ -229,50 +224,43 @@ class FacebookMarketplaceProvider {
                 ariaLabel: a.getAttribute("aria-label"),
               };
             }).filter(x => x.id)
-        );
+          );
+        } finally {
+          await page.close();
+        }
+      }));
 
-        for (const item of pageItems) {
-          if (!itemsSeen.has(item.id)) {
-            itemsSeen.add(item.id);
-            rawItems.push(item);
-          }
+      // Merge and deduplicate across all keyword tabs
+      const itemsSeen = new Set();
+      const rawItems = [];
+      for (const batch of perKeywordItems) {
+        for (const item of batch) {
+          if (!itemsSeen.has(item.id)) { itemsSeen.add(item.id); rawItems.push(item); }
         }
       }
 
-      const items = rawItems;
-
-      // Radius from saved search (default 100 mi)
+      // Parse cards and geocode in parallel
       const centerLat   = search?.center_lat   ?? lat;
       const centerLon   = search?.center_lon   ?? lon;
       const radiusMiles = search?.radius_miles ?? 100;
 
-      const seen = new Set();
-      const listings = [];
-
-      for (const item of items) {
-        if (seen.has(item.id)) continue;
-        seen.add(item.id);
-
+      const candidates = await Promise.all(rawItems.map(async item => {
         const { title, location, price, listedAt } = parseCard(item.imgAlt, item.ariaLabel, item.spans);
+        if (!title || location === "Ships to you") return null;
 
-        if (!title) continue;
-        if (location === "Ships to you") continue;
-
-        // Geocode the location and enforce the saved search radius
         let latitude = null;
         let longitude = null;
         if (location) {
           const coords = await geocodeLocation(location);
           if (coords) {
             const distMiles = haversine(centerLat, centerLon, coords.lat, coords.lon);
-            if (distMiles > radiusMiles) continue;
+            if (distMiles > radiusMiles) return null;
             latitude  = coords.lat;
             longitude = coords.lon;
           }
-          // If geocoding fails, let the listing through — matcher will mark it unverified
         }
 
-        listings.push({
+        return {
           source:       "facebook_marketplace",
           listingId:    item.id,
           title,
@@ -287,16 +275,28 @@ class FacebookMarketplaceProvider {
           listedAt:     listedAt || null,
           discoveredAt: new Date().toISOString(),
           raw:          { fb: true },
-        });
-      }
+        };
+      }));
 
-      // For listings where the card didn't give us a date, fetch from detail page.
-      // Cap at 10 to keep scan time reasonable; already-dated listings are skipped.
+      const listings = candidates.filter(Boolean);
+
+      // Fetch listed date from detail pages in parallel for items missing it.
+      // Open up to 5 tabs simultaneously, capped at 10 total.
       const needDate = listings.filter(l => !l.listedAt).slice(0, 10);
-      for (const l of needDate) {
-        const id = l.listingId;
-        const fetched = await fetchFbListedAt(page, id);
-        if (fetched) l.listedAt = fetched;
+      if (needDate.length > 0) {
+        const CONCURRENCY = 5;
+        for (let i = 0; i < needDate.length; i += CONCURRENCY) {
+          const chunk = needDate.slice(i, i + CONCURRENCY);
+          await Promise.all(chunk.map(async l => {
+            const page = await context.newPage();
+            try {
+              const fetched = await fetchFbListedAt(page, l.listingId);
+              if (fetched) l.listedAt = fetched;
+            } finally {
+              await page.close();
+            }
+          }));
+        }
       }
 
       this._lastCheck = new Date().toISOString();
