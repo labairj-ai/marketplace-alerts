@@ -8,12 +8,21 @@ const HIGH_MEM_VARIANTS = [
 // Explicit RAM mentions we can parse (GB)
 const RAM_PATTERN = /\b(\d+)\s*(?:gb|g)\b/gi;
 
-// Listings that mention these are definitely rejected
-const REJECT_EXACT = [
-  "studio display",        // Apple display, not the Mac
-  "retina lcd display",    // display panel, not the Mac
-  "studio fix",            // MAC Studio Fix makeup
+// Listings that mention these are definitely rejected — checked BEFORE the
+// isMacStudio guard so makeup/accessory listings with "MAC Studio" in the name
+// are caught unconditionally.
+const REJECT_ALWAYS = [
+  "studio fix",            // MAC Studio Fix makeup brand
   "conceal and correct",   // makeup product
+  "colour corrector",      // makeup product
+  "color corrector",       // makeup product
+  "retina lcd display",    // replacement display panel, not the computer
+  "ssd only",              // storage drive, not complete computer
+];
+
+// Rejected unless the listing is explicitly a Mac Studio computer
+const REJECT_EXACT = [
+  "studio display",        // Apple display
   "macbook pro",
   "macbook air",
   "macbook",
@@ -29,8 +38,7 @@ const REJECT_EXACT = [
   "for parts",
   "parts only",
   "broken",
-  "ssd only",              // storage drive listing, not complete computer
-  "for mac studio",        // accessory for the Mac Studio, not the Mac
+  "for mac studio",        // accessory for the Mac Studio
 ];
 
 function extractRamGb(text) {
@@ -70,6 +78,13 @@ function isHighMemVariant(text) {
 function matchMacStudio(listing, search) {
   const combined = `${listing.title} ${listing.description || ""}`;
   const lower = combined.toLowerCase();
+
+  // Unconditional rejects — makeup/accessories that happen to include "MAC Studio"
+  for (const term of REJECT_ALWAYS) {
+    if (lower.includes(term)) {
+      return { classification: "REJECTED", reasons: [`Contains "${term}" — not an Apple Mac Studio computer`] };
+    }
+  }
 
   // Hard rejects first
   if (isStudioDisplay(combined)) {
