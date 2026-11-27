@@ -93,28 +93,29 @@ function matchMacStudio(listing, search) {
 
   const reasons = ["Apple Mac Studio confirmed"];
 
-  // Brand and type confirmed
   const ram = extractRamGb(combined);
-  const minRam = search.specs ? JSON.parse(search.specs).minRamGb || 64 : 64;
+  const specs = search.specs ? JSON.parse(search.specs) : {};
+  const minRam = specs.minRamGb || 0;
 
   if (ram !== null) {
-    if (ram < minRam) {
+    if (minRam > 0 && ram < minRam) {
+      // Only hard-reject if the search explicitly requires a RAM minimum
       return {
         classification: "REJECTED",
         reasons: [...reasons, `RAM ${ram}GB is below required ${minRam}GB minimum`],
       };
     }
-    reasons.push(`RAM ${ram}GB meets ${minRam}GB minimum`);
+    reasons.push(`${ram}GB RAM`);
     return { classification: "CONFIRMED", reasons };
   }
 
-  // No RAM stated — check if variant implies high memory
+  // No RAM stated — confirm if variant implies high memory, otherwise possible
   if (isHighMemVariant(combined)) {
-    reasons.push("High-memory variant detected (RAM not explicitly stated but variant typically ≥64GB)");
-    return { classification: "POSSIBLE", reasons };
+    reasons.push("High-memory variant — RAM not stated but typically ≥64GB");
+    return { classification: "CONFIRMED", reasons };
   }
 
-  reasons.push("RAM capacity not specified — cannot confirm ≥64GB requirement");
+  reasons.push("RAM not stated in listing");
   return { classification: "POSSIBLE", reasons };
 }
 
