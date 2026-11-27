@@ -444,7 +444,9 @@ function SearchesView({ onCheckNow }) {
         <select value={sort} onChange={e=>setSort(e.target.value)} style={{
           border:"1.5px solid var(--border2)",borderRadius:8,padding:"6px 10px",
           fontSize:12.5,background:"var(--surface)",color:"var(--text)",cursor:"pointer"}}>
-          <option value="newest">Newest first</option>
+          <option value="newest">Found: newest first</option>
+          <option value="listed_desc">Listed: newest first</option>
+          <option value="listed_asc">Listed: oldest first</option>
           <option value="price_asc">Price: low → high</option>
           <option value="price_desc">Price: high → low</option>
         </select>
@@ -464,7 +466,7 @@ function SearchesView({ onCheckNow }) {
                   <th style={{...TH}}>Match</th>
                   <th style={{...TH}}>Source</th>
                   <th style={{...TH}} className="hide-mobile">Location</th>
-                  <th style={{...TH}} className="hide-mobile">Found</th>
+                  <th style={{...TH}} className="hide-mobile">Listed</th>
                 </tr>
               </thead>
               {searches.map((s, si) => {
@@ -538,7 +540,7 @@ function SearchesView({ onCheckNow }) {
                           {l.location_text||"—"}
                         </td>
                         <td className="hide-mobile" style={{...TD,color:"var(--muted)",whiteSpace:"nowrap",fontSize:12}}>
-                          {fmtDate(l.first_matched)}
+                          {fmtDate(l.listed_at)}
                         </td>
                       </tr>
                     ))}
@@ -600,7 +602,9 @@ function HistoryView() {
             </div>
             <div style={{fontWeight:700,fontSize:14,color:"var(--accent)",whiteSpace:"nowrap",
               fontVariantNumeric:"tabular-nums"}}>{fmtPrice(h.price)}</div>
-            <div className="hide-mobile" style={{fontSize:11,color:"var(--muted)",whiteSpace:"nowrap"}}>{fmtDate(h.first_matched)}</div>
+            <div className="hide-mobile" style={{fontSize:11,color:"var(--muted)",whiteSpace:"nowrap"}}>
+              {fmtDate(h.listed_at)}
+            </div>
             <div>{h.listing_url
               ? <a href={h.listing_url} target="_blank" rel="noreferrer"
                   style={{color:"var(--accent)",fontSize:12,fontWeight:600}}>View →</a>

@@ -19,6 +19,7 @@ function parseCard(imgAlt, ariaLabel, spans) {
   let title = null;
   let location = null;
   let price = null;
+  let listedAt = null;
 
   // imgAlt: "Product name in City, ST"
   if (imgAlt) {
@@ -41,6 +42,43 @@ function parseCard(imgAlt, ariaLabel, spans) {
     }
   }
 
+  // Listed date from spans — FB shows relative times ("2 days ago", "Listed today", "November 20")
+  if (!listedAt) {
+    const now = Date.now();
+    for (const span of spans) {
+      const s = span.trim();
+      // "Listed today" / "Just listed"
+      if (/^(listed today|just listed)$/i.test(s)) {
+        listedAt = new Date(now).toISOString();
+        break;
+      }
+      // "X hours ago"
+      const hoursM = s.match(/^(\d+)\s+hours?\s+ago$/i);
+      if (hoursM) {
+        listedAt = new Date(now - Number(hoursM[1]) * 3600_000).toISOString();
+        break;
+      }
+      // "X days ago"
+      const daysM = s.match(/^(\d+)\s+days?\s+ago$/i);
+      if (daysM) {
+        listedAt = new Date(now - Number(daysM[1]) * 86_400_000).toISOString();
+        break;
+      }
+      // "X weeks ago"
+      const weeksM = s.match(/^(\d+)\s+weeks?\s+ago$/i);
+      if (weeksM) {
+        listedAt = new Date(now - Number(weeksM[1]) * 7 * 86_400_000).toISOString();
+        break;
+      }
+      // "November 20" or "December 1" (absolute month/day, assume current year)
+      const monthDayM = s.match(/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})$/i);
+      if (monthDayM) {
+        const parsed = new Date(`${monthDayM[0]} ${new Date().getFullYear()}`);
+        if (!isNaN(parsed.getTime())) { listedAt = parsed.toISOString(); break; }
+      }
+    }
+  }
+
   // Fall back to ariaLabel for title if imgAlt didn't give one
   if (!title && ariaLabel) {
     // "Just listed, Title, $600, City ST, listing XXXXXX"
@@ -49,7 +87,52 @@ function parseCard(imgAlt, ariaLabel, spans) {
     if (titleIdx >= 0) title = parts[titleIdx];
   }
 
-  return { title, location, price };
+  return { title, location, price, listedAt };
+}
+
+// Try to extract listing date from a FB item detail page.
+// FB renders something like "Listed November 20 at 2:30 PM" in a span.
+// Returns ISO string or null. Best-effort: never throws.
+async function fetchFbListedAt(page, itemId) {
+  try {
+    await page.goto(
+      `https://www.facebook.com/marketplace/item/${itemId}/`,
+      { waitUntil: "domcontentloaded", timeout: 15_000 }
+    );
+    await page.waitForTimeout(1500);
+
+    const dateText = await page.evaluate(() => {
+      // Look for "Listed <Month> <Day>" in any span text
+      const spans = [...document.querySelectorAll("span")];
+      for (const span of spans) {
+        const t = span.textContent.trim();
+        if (/^Listed\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d/i.test(t)) {
+          return t;
+        }
+      }
+      // Fall back to <time> element with datetime attribute
+      const time = document.querySelector("time[datetime]");
+      if (time) return time.getAttribute("datetime");
+      return null;
+    });
+
+    if (!dateText) return null;
+
+    // "Listed November 20 at 2:30 PM" → parse
+    const listedM = dateText.match(/^Listed\s+(.+)$/i);
+    if (listedM) {
+      const raw = listedM[1].replace(" at ", " ");
+      const d = new Date(`${raw} ${new Date().getFullYear()}`);
+      if (!isNaN(d.getTime())) return d.toISOString();
+    }
+    // ISO datetime from <time>
+    const d = new Date(dateText);
+    if (!isNaN(d.getTime())) return d.toISOString();
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // --- provider ---
@@ -101,47 +184,62 @@ class FacebookMarketplaceProvider {
       });
       const page = await context.newPage();
 
-      // Search with the first keyword — most specific, reduces result noise
-      const keyword = keywords[0] || "";
-      // 113407735336754 = Cincinnati marketplace city ID (from FB's own redirect)
-      const url =
-        `https://www.facebook.com/marketplace/113407735336754/search/` +
-        `?query=${encodeURIComponent(keyword)}` +
-        `&latitude=${lat}&longitude=${lon}&radius=100`;
+      // Search all keywords in a single browser session — each keyword gets its own
+      // page load, results are merged and deduplicated by listing ID before processing.
+      const keywordsToSearch = keywords.length > 0 ? keywords : [""];
+      const rawItems = [];
+      const itemsSeen = new Set();
 
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await page.waitForTimeout(3000);
+      for (const keyword of keywordsToSearch) {
+        // 113407735336754 = Cincinnati marketplace city ID (from FB's own redirect)
+        const url =
+          `https://www.facebook.com/marketplace/113407735336754/search/` +
+          `?query=${encodeURIComponent(keyword)}` +
+          `&latitude=${lat}&longitude=${lon}&radius=100`;
 
-      // Keep scrolling to the last card until no new ones appear (up to ~8 rounds)
-      let prevCount = 0;
-      for (let i = 0; i < 20; i++) {
-        const count = await page.$$eval('a[href*="/marketplace/item/"]', els => els.length);
-        if (count === prevCount) break;
-        prevCount = count;
-        await page.evaluate(() => {
-          const cards = document.querySelectorAll('a[href*="/marketplace/item/"]');
-          if (cards.length) cards[cards.length - 1].scrollIntoView();
-        });
-        await page.waitForTimeout(2000);
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+        await page.waitForTimeout(3000);
+
+        // Keep scrolling until no new cards appear
+        let prevCount = 0;
+        for (let i = 0; i < 20; i++) {
+          const count = await page.$$eval('a[href*="/marketplace/item/"]', els => els.length);
+          if (count === prevCount) break;
+          prevCount = count;
+          await page.evaluate(() => {
+            const cards = document.querySelectorAll('a[href*="/marketplace/item/"]');
+            if (cards.length) cards[cards.length - 1].scrollIntoView();
+          });
+          await page.waitForTimeout(2000);
+        }
+
+        const pageItems = await page.$$eval(
+          'a[href*="/marketplace/item/"]',
+          anchors =>
+            anchors.map(a => {
+              const id = (a.href.match(/\/marketplace\/item\/(\d+)/) || [])[1];
+              const spans = [...a.querySelectorAll("span")]
+                .map(s => s.textContent.trim())
+                .filter(s => s.length > 0 && s.length < 300);
+              const img = a.querySelector("img");
+              return {
+                id,
+                spans: spans.slice(0, 15),
+                imgAlt: img ? img.alt : null,
+                ariaLabel: a.getAttribute("aria-label"),
+              };
+            }).filter(x => x.id)
+        );
+
+        for (const item of pageItems) {
+          if (!itemsSeen.has(item.id)) {
+            itemsSeen.add(item.id);
+            rawItems.push(item);
+          }
+        }
       }
 
-      const items = await page.$$eval(
-        'a[href*="/marketplace/item/"]',
-        anchors =>
-          anchors.map(a => {
-            const id = (a.href.match(/\/marketplace\/item\/(\d+)/) || [])[1];
-            const spans = [...a.querySelectorAll("span")]
-              .map(s => s.textContent.trim())
-              .filter(s => s.length > 0 && s.length < 300);
-            const img = a.querySelector("img");
-            return {
-              id,
-              spans: spans.slice(0, 10),
-              imgAlt: img ? img.alt : null,
-              ariaLabel: a.getAttribute("aria-label"),
-            };
-          }).filter(x => x.id)
-      );
+      const items = rawItems;
 
       // Radius from saved search (default 100 mi)
       const centerLat   = search?.center_lat   ?? lat;
@@ -155,7 +253,7 @@ class FacebookMarketplaceProvider {
         if (seen.has(item.id)) continue;
         seen.add(item.id);
 
-        const { title, location, price } = parseCard(item.imgAlt, item.ariaLabel, item.spans);
+        const { title, location, price, listedAt } = parseCard(item.imgAlt, item.ariaLabel, item.spans);
 
         if (!title) continue;
         if (location === "Ships to you") continue;
@@ -186,10 +284,19 @@ class FacebookMarketplaceProvider {
           longitude,
           imageUrl:     null,
           listingUrl:   `https://www.facebook.com/marketplace/item/${item.id}/`,
-          listedAt:     null,
+          listedAt:     listedAt || null,
           discoveredAt: new Date().toISOString(),
           raw:          { fb: true },
         });
+      }
+
+      // For listings where the card didn't give us a date, fetch from detail page.
+      // Cap at 10 to keep scan time reasonable; already-dated listings are skipped.
+      const needDate = listings.filter(l => !l.listedAt).slice(0, 10);
+      for (const l of needDate) {
+        const id = l.listingId;
+        const fetched = await fetchFbListedAt(page, id);
+        if (fetched) l.listedAt = fetched;
       }
 
       this._lastCheck = new Date().toISOString();

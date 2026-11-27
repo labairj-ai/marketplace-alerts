@@ -226,10 +226,12 @@ app.get("/api/listings", (req, res) => {
   if (source) { sql += " AND s.slug=?"; params.push(source); }
 
   const orderMap = {
-    newest: "sm.first_matched DESC",
-    price_asc: "l.price ASC",
+    newest:     "sm.first_matched DESC",
+    listed_desc:"COALESCE(l.listed_at, l.discovered_at) DESC",
+    listed_asc: "COALESCE(l.listed_at, l.discovered_at) ASC",
+    price_asc:  "l.price ASC",
     price_desc: "l.price DESC",
-    distance: "l.id ASC",
+    distance:   "l.id ASC",
   };
   sql += ` ORDER BY ${orderMap[sort] || orderMap.newest}`;
 
@@ -266,7 +268,7 @@ app.get("/api/alerts/history", (req, res) => {
   const db = getDb();
   const rows = db.prepare(`
     SELECT sm.*, l.title as listing_title, l.price, l.location_text, l.listing_url,
-      l.image_url, l.discovered_at, s.name as source_name, s.slug as source_slug,
+      l.image_url, l.discovered_at, l.listed_at, s.name as source_name, s.slug as source_slug,
       ss.name as search_name
     FROM search_matches sm
     JOIN listings l ON l.id=sm.listing_id
