@@ -68,6 +68,11 @@ class CraigslistProvider {
           if (!id || seen.has(id)) continue;
           seen.add(id);
 
+          // Drop listings whose title doesn't contain any of the keywords
+          const titleLower = (item.PostingTitle || "").toLowerCase();
+          const anyKeyword = keywords.some(k => titleLower.includes(k.toLowerCase()));
+          if (!anyKeyword) continue;
+
           listings.push({
             source:       "craigslist",
             listingId:    id,
