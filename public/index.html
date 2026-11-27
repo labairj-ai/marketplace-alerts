@@ -453,77 +453,65 @@ function SearchesView({ onCheckNow }) {
 
       {searches.length === 0 ? (
         <EmptyState icon="◎" title="Nothing on your watchlist" sub="Add a saved search to start monitoring marketplaces for deals." />
-      ) : searches.map(s => {
-        const searchListings = listingsMap[s.id] || [];
-        const confirmed = searchListings.filter(l => l.classification === "CONFIRMED");
-        const possible  = searchListings.filter(l => l.classification === "POSSIBLE");
+      ) : (
+        <Card>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr>
+                  <th style={{...TH,width:"38%"}}>Title</th>
+                  <th style={{...TH,textAlign:"right"}}>Price</th>
+                  <th style={{...TH}}>Match</th>
+                  <th style={{...TH}}>Source</th>
+                  <th style={{...TH}} className="hide-mobile">Location</th>
+                  <th style={{...TH}} className="hide-mobile">Found</th>
+                  <th style={{...TH}}></th>
+                </tr>
+              </thead>
+              {searches.map((s, si) => {
+                const searchListings = listingsMap[s.id] || [];
+                const confirmed = searchListings.filter(l => l.classification === "CONFIRMED");
+                const possible  = searchListings.filter(l => l.classification === "POSSIBLE");
 
-        return (
-          <div key={s.id} style={{
-            background:"var(--surface)", borderRadius:12, marginBottom:14,
-            boxShadow:"0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)",
-            border:"1px solid var(--border)",
-            borderLeft:`4px solid ${s.enabled?"var(--green)":"var(--border2)"}`,
-          }}>
-            {/* Search header */}
-            <div style={{padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,flexWrap:"wrap"}}>
-                  <span style={{fontWeight:700,fontSize:15,color:"var(--text)",letterSpacing:"-0.01em"}}>{s.name}</span>
-                  <Pill bg={s.enabled?"var(--green-bg)":"var(--surface2)"}
-                    color={s.enabled?"var(--green)":"var(--muted)"}
-                    border={s.enabled?"var(--green-br)":"var(--border2)"}>
-                    {s.enabled?"● Active":"○ Paused"}
-                  </Pill>
-                  {confirmed.length > 0 && (
-                    <Pill {...CONFIRMED_C}>{confirmed.length} confirmed</Pill>
-                  )}
-                  {possible.length > 0 && (
-                    <Pill {...POSSIBLE_C}>{possible.length} possible</Pill>
-                  )}
-                </div>
-
-                <div style={{fontSize:12,color:"var(--text2)",display:"flex",flexWrap:"wrap",gap:"2px 16px",marginBottom:10}}>
-                  <span>{s.center_label} · {s.radius_miles} mi</span>
-                  {s.price_max != null && <span>Under ${s.price_max.toLocaleString()}</span>}
-                  {s.price_min != null && <span>Min ${s.price_min.toLocaleString()}</span>}
-                  {s.last_checked && <span style={{color:"var(--muted)"}}>Last scan {new Date(s.last_checked).toLocaleString()}</span>}
-                </div>
-
-                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                  {(s.keywords||[]).map(k => (
-                    <span key={k} style={{background:"var(--surface2)",border:"1px solid var(--border)",
-                      borderRadius:6,padding:"2px 8px",fontSize:11.5,color:"var(--text2)"}}>{k}</span>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
-                <Btn onClick={()=>handleCheck(s.id)} variant="success" disabled={checking[s.id]}>
-                  {checking[s.id]?"Scanning…":"Scan now"}
-                </Btn>
-                <Btn onClick={()=>toggleSearch(s)} variant="ghost">{s.enabled?"Pause":"Resume"}</Btn>
-                <Btn onClick={()=>setModal(s)} variant="ghost">Edit</Btn>
-                <Btn onClick={()=>deleteSearch(s.id)} variant="danger" title="Delete">✕</Btn>
-              </div>
-            </div>
-
-            {/* Listings inline */}
-            {searchListings.length > 0 ? (
-              <div style={{borderTop:"1px solid var(--border)",overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                  <thead>
-                    <tr style={{background:"var(--surface2)"}}>
-                      <th style={{...TH,width:"40%"}}>Title</th>
-                      <th style={{...TH,textAlign:"right"}}>Price</th>
-                      <th style={{...TH}}>Match</th>
-                      <th style={{...TH}}>Source</th>
-                      <th style={{...TH}} className="hide-mobile">Location</th>
-                      <th style={{...TH}} className="hide-mobile">Found</th>
-                      <th style={{...TH}}></th>
+                return (
+                  <tbody key={s.id}>
+                    {/* Section header row */}
+                    <tr>
+                      <td colSpan={7} style={{
+                        padding:"9px 14px",
+                        borderTop: si > 0 ? "2px solid var(--border2)" : "none",
+                        background:"var(--surface2)",
+                      }}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                          <div style={{width:3,height:14,borderRadius:2,flexShrink:0,
+                            background:s.enabled?"var(--green)":"var(--border2)"}} />
+                          <span style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{s.name}</span>
+                          <Pill bg={s.enabled?"var(--green-bg)":"var(--surface2)"}
+                            color={s.enabled?"var(--green)":"var(--muted)"}
+                            border={s.enabled?"var(--green-br)":"var(--border2)"}>
+                            {s.enabled?"● Active":"○ Paused"}
+                          </Pill>
+                          {confirmed.length > 0 && <Pill {...CONFIRMED_C}>{confirmed.length} confirmed</Pill>}
+                          {possible.length > 0  && <Pill {...POSSIBLE_C}>{possible.length} possible</Pill>}
+                          <div style={{marginLeft:"auto",display:"flex",gap:5,flexShrink:0}}>
+                            <Btn onClick={()=>handleCheck(s.id)} variant="success" disabled={checking[s.id]}
+                              style={{padding:"4px 10px",fontSize:12}}>
+                              {checking[s.id]?"…":"Scan"}
+                            </Btn>
+                            <Btn onClick={()=>toggleSearch(s)} variant="ghost"
+                              style={{padding:"4px 10px",fontSize:12}}>
+                              {s.enabled?"Pause":"Resume"}
+                            </Btn>
+                            <Btn onClick={()=>setModal(s)} variant="ghost"
+                              style={{padding:"4px 10px",fontSize:12}}>Edit</Btn>
+                            <Btn onClick={()=>deleteSearch(s.id)} variant="danger" title="Delete"
+                              style={{padding:"4px 8px",fontSize:12}}>✕</Btn>
+                          </div>
+                        </div>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
+
+                    {/* Listing rows */}
                     {[...confirmed, ...possible].map((l, ri) => (
                       <tr key={`${l.id}-${l.search_id}`}
                         style={{borderTop:"1px solid var(--border)",
@@ -535,17 +523,8 @@ function SearchesView({ onCheckNow }) {
                               {l.title}
                             </a>
                           </div>
-                          {(l.reasons||[]).length > 0 && (
-                            <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4}}>
-                              {l.reasons.map((r,i) => (
-                                <span key={i} style={{background:"var(--surface2)",
-                                  border:"1px solid var(--border)",borderRadius:4,
-                                  padding:"1px 6px",fontSize:10.5,color:"var(--muted)"}}>{r}</span>
-                              ))}
-                            </div>
-                          )}
                         </td>
-                        <td style={{...TD,textAlign:"right",fontWeight:700,fontSize:15,
+                        <td style={{...TD,textAlign:"right",fontWeight:700,fontSize:14,
                           color:"var(--accent)",whiteSpace:"nowrap",
                           fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
                           {fmtPrice(l.price)}
@@ -559,7 +538,7 @@ function SearchesView({ onCheckNow }) {
                         <td className="hide-mobile" style={{...TD,color:"var(--text2)",whiteSpace:"nowrap"}}>
                           {l.location_text||"—"}
                         </td>
-                        <td className="hide-mobile" style={{...TD,color:"var(--muted)",whiteSpace:"nowrap"}}>
+                        <td className="hide-mobile" style={{...TD,color:"var(--muted)",whiteSpace:"nowrap",fontSize:12}}>
                           {fmtDate(l.first_matched)}
                         </td>
                         <td style={{...TD,whiteSpace:"nowrap"}}>
@@ -572,18 +551,22 @@ function SearchesView({ onCheckNow }) {
                         </td>
                       </tr>
                     ))}
+
+                    {/* Empty state row */}
+                    {searchListings.length === 0 && (
+                      <tr>
+                        <td colSpan={7} style={{...TD,color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>
+                          No matches yet
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
-                </table>
-              </div>
-            ) : (
-              <div style={{borderTop:"1px solid var(--border)",padding:"10px 20px",
-                fontSize:12,color:"var(--muted)",fontStyle:"italic"}}>
-                No matches yet
-              </div>
-            )}
+                );
+              })}
+            </table>
           </div>
-        );
-      })}
+        </Card>
+      )}
     </div>
   );
 }
