@@ -106,6 +106,11 @@ function matchMacStudio(listing, search) {
     return { classification: "REJECTED", reasons: ["Parts-only listing — search requires complete working unit"] };
   }
 
+  // "for mac studio" = accessory listing — reject even when "Mac Studio" appears
+  if (lower.includes("for mac studio")) {
+    return { classification: "REJECTED", reasons: ['"for mac studio" — accessory for Mac Studio, not the computer itself'] };
+  }
+
   // Must identify as Mac Studio
   if (!isMacStudio(combined)) {
     return { classification: "REJECTED", reasons: ["Not identified as Apple Mac Studio"] };

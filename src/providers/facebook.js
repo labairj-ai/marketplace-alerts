@@ -97,8 +97,12 @@ class FacebookMarketplaceProvider {
         `&latitude=${lat}&longitude=${lon}&radius=100`;
 
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      // Wait for JS-rendered listing cards
-      await page.waitForTimeout(4000);
+      // Wait for initial render, then scroll to trigger lazy-loaded cards
+      await page.waitForTimeout(3000);
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(2000);
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(1500);
 
       const items = await page.$$eval(
         'a[href*="/marketplace/item/"]',
