@@ -474,7 +474,7 @@ function SearchesView({ onCheckNow }) {
                 {checking[s.id]?"Scanning…":"Scan now"}
               </Btn>
               <Btn onClick={()=>toggleSearch(s)} variant="ghost">{s.enabled?"Pause":"Resume"}</Btn>
-              <Btn onClick={()=>setModal({...s,...editForm(s)})} variant="ghost">Edit</Btn>
+              <Btn onClick={()=>setModal(s)} variant="ghost">Edit</Btn>
               <Btn onClick={()=>deleteSearch(s.id)} variant="danger" title="Delete">✕</Btn>
             </div>
           </div>
