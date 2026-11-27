@@ -4,7 +4,7 @@ const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
 const { geocodeLocation } = require("../geo/geocoder");
-const { haversine } = require("../geo");
+const { haversine, CITY_CENTERS } = require("../geo");
 
 const SESSION_FILE =
   process.env.FB_SESSION_FILE ||
@@ -79,12 +79,20 @@ function parseCard(imgAlt, ariaLabel, spans) {
     }
   }
 
-  // Fall back to ariaLabel for title if imgAlt didn't give one
-  if (!title && ariaLabel) {
-    // "Just listed, Title, $600, City ST, listing XXXXXX"
-    const parts = ariaLabel.split(", ");
-    const titleIdx = parts.findIndex(p => !/^(\$[\d,]+|listing \d+|Just listed|New listing)$/i.test(p) && p.length > 5);
-    if (titleIdx >= 0) title = parts[titleIdx];
+  // Fall back to ariaLabel for title and/or location if imgAlt didn't give them
+  if ((!title || !location) && ariaLabel) {
+    // ariaLabel: "Just listed, Title, $600, Pittsburgh, PA, listing XXXXXX"
+    // Extract title
+    if (!title) {
+      const parts = ariaLabel.split(", ");
+      const titleIdx = parts.findIndex(p => !/^(\$[\d,]+|listing \d+|Just listed|New listing)$/i.test(p) && p.length > 5);
+      if (titleIdx >= 0) title = parts[titleIdx];
+    }
+    // Extract location — look for "City, ST" near the end of the ariaLabel
+    if (!location) {
+      const locM = ariaLabel.match(/,\s*([A-Za-z][A-Za-z\s\-]+),\s*([A-Z]{2})[,\s]*(listing\s+\d+)?$/);
+      if (locM) location = `${locM[1].trim()}, ${locM[2]}`;
+    }
   }
 
   return { title, location, price, listedAt };
@@ -248,16 +256,27 @@ class FacebookMarketplaceProvider {
         const { title, location, price, listedAt } = parseCard(item.imgAlt, item.ariaLabel, item.spans);
         if (!title || location === "Ships to you") return null;
 
+        // Reject listings where we cannot verify they're within the search radius.
+        // FB's own radius parameter is unreliable — out-of-state results slip through.
+        if (!location) return null;
+
         let latitude = null;
         let longitude = null;
-        if (location) {
-          const coords = await geocodeLocation(location);
-          if (coords) {
-            const distMiles = haversine(centerLat, centerLon, coords.lat, coords.lon);
-            if (distMiles > radiusMiles) return null;
-            latitude  = coords.lat;
-            longitude = coords.lon;
-          }
+
+        const coords = await geocodeLocation(location);
+        if (coords) {
+          const distMiles = haversine(centerLat, centerLon, coords.lat, coords.lon);
+          if (distMiles > radiusMiles) return null;
+          latitude  = coords.lat;
+          longitude = coords.lon;
+        } else {
+          // Nominatim failed — try city-center lookup as a fallback
+          const cityKey = Object.keys(CITY_CENTERS).find(k => location.toLowerCase().includes(k));
+          if (!cityKey) return null; // unknown location, can't verify → reject
+          const city = CITY_CENTERS[cityKey];
+          const distMiles = haversine(centerLat, centerLon, city.lat, city.lon);
+          if (distMiles > radiusMiles) return null; // city center out of range → reject
+          // City center is in range — let through, lat/lon stay null
         }
 
         return {
