@@ -111,9 +111,10 @@ function matchMacStudio(listing, search) {
     return { classification: "REJECTED", reasons: ['"for mac studio" — accessory for Mac Studio, not the computer itself'] };
   }
 
-  // Must identify as Mac Studio
-  if (!isMacStudio(combined)) {
-    return { classification: "REJECTED", reasons: ["Not identified as Apple Mac Studio"] };
+  // Identity must appear in the listing TITLE — description stores the CL search
+  // query term and cannot be trusted to establish what the listing actually is.
+  if (!isMacStudio(listing.title)) {
+    return { classification: "REJECTED", reasons: ["Not identified as Apple Mac Studio in listing title"] };
   }
 
   const reasons = ["Apple Mac Studio confirmed"];

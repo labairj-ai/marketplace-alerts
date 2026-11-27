@@ -197,8 +197,25 @@ app.post("/api/searches/:id/check", async (req, res) => {
         upsertMatch(db, search.id, listingId, matchResult.classification, matchResult.reasons);
         matches.push({ ...matchResult, listing });
       } else {
-        // If this listing was previously matched, remove the stale match record
         db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listingId);
+      }
+    }
+
+    // Re-evaluate every existing match for this search — not just newly-scanned ones.
+    // This purges listings that were matched in a prior scan but are now out of scope
+    // (geo rule tightened, criteria changed, etc.) so Scan Now always reflects reality.
+    const existingMatches = db.prepare(
+      "SELECT sm.listing_id FROM search_matches sm WHERE sm.search_id=? AND sm.listing_id NOT IN (SELECT value FROM json_each(?))"
+    ).all(search.id, JSON.stringify([...seenListingIds]));
+
+    for (const { listing_id } of existingMatches) {
+      const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(listing_id);
+      if (!listing) { db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id); continue; }
+      const matchResult = matchListing(listing, search);
+      if (matchResult.classification === "REJECTED") {
+        db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id);
+      } else {
+        upsertMatch(db, search.id, listing_id, matchResult.classification, matchResult.reasons);
       }
     }
 
