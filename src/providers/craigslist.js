@@ -233,13 +233,16 @@ class CraigslistEmailProvider {
 
   async getStatus() {
     if (!this._configured) {
-      return { status: "NOT_CONFIGURED", lastCheck: null, error: "EMAIL credentials not set" };
+      return { status: "NOT_CONFIGURED", lastCheck: null, error: "EMAIL_FROM and EMAIL_APP_PASSWORD not set" };
     }
-    return {
-      status: this._lastError ? "ERROR" : (this._lastCheck ? "LIVE" : "NOT_CONFIGURED"),
-      lastCheck: this._lastCheck,
-      error: this._lastError,
-    };
+    if (this._lastError) {
+      return { status: "ERROR", lastCheck: this._lastCheck, error: this._lastError };
+    }
+    if (this._lastCheck) {
+      return { status: "LIVE", lastCheck: this._lastCheck, error: null };
+    }
+    // Credentials configured, not yet tested
+    return { status: "NOT_CONFIGURED", lastCheck: null, error: "Gmail IMAP not yet tested — will run on next scan" };
   }
 }
 
