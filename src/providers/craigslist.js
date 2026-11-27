@@ -68,6 +68,10 @@ class CraigslistProvider {
           if (!id || seen.has(id)) continue;
           seen.add(id);
 
+          // Skip "wanted" / request posts — they're not listings for sale
+          const titleCheck = (item.PostingTitle || "").toLowerCase();
+          if (/\b(wanted|wtb|iso\s|in search of|looking for)\b/.test(titleCheck)) continue;
+
           listings.push({
             source:       "craigslist",
             listingId:    id,
