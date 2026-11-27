@@ -4,25 +4,76 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Marketplace Alerts</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2312243d'/%3E%3Ctext x='7' y='22' font-family='Arial' font-weight='700' font-size='18' fill='%23f2ead8'%3E🔔%3C/text%3E%3C/svg%3E">
-  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236366f1'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23fff'/%3E%3C/svg%3E">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
   <style>
+    :root {
+      --bg:          #f1f5f9;
+      --surface:     #ffffff;
+      --surface2:    #f8fafc;
+      --border:      #e2e8f0;
+      --border2:     #cbd5e1;
+      --text:        #0f172a;
+      --text2:       #475569;
+      --muted:       #94a3b8;
+      --accent:      #6366f1;
+      --accent-d:    #4f46e5;
+      --green:       #16a34a;
+      --green-bg:    #dcfce7;
+      --green-br:    #86efac;
+      --amber:       #b45309;
+      --amber-bg:    #fef3c7;
+      --amber-br:    #fcd34d;
+      --red:         #dc2626;
+      --red-bg:      #fee2e2;
+      --red-br:      #fca5a5;
+      --blue:        #2563eb;
+      --blue-bg:     #dbeafe;
+      --blue-br:     #93c5fd;
+      --header:      #0f172a;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #f0e8d4; font-family: 'Inter', sans-serif; }
-    input, select, textarea, button { font-family: 'Inter', sans-serif; }
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: #e4d8c0; }
-    ::-webkit-scrollbar-thumb { background: #b8a888; border-radius: 3px; }
+    body {
+      background: var(--bg);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: var(--text);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    input, select, textarea, button { font-family: inherit; }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(74,222,128,0.4); }
+      50%       { opacity: 0.7; transform: scale(0.9); box-shadow: 0 0 0 4px rgba(74,222,128,0); }
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @keyframes slide-in {
+      from { transform: translateY(-8px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+
+    a:hover { opacity: 0.8; }
+    button:hover:not(:disabled) { opacity: 0.88; }
+
     @media (max-width: 640px) {
-      body, #root { overflow-x: hidden; max-width: 100vw; }
-      .ma-header { padding: 8px 14px !important; flex-wrap: wrap; height: auto !important; gap: 6px; }
-      .ma-nav { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+      .hide-mobile { display: none !important; }
+      .ma-nav { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
       .ma-nav::-webkit-scrollbar { display: none; }
-      .ma-nav button { padding: 4px 12px 2px !important; font-size: 10px !important; white-space: nowrap; }
-      .ma-main { padding: 14px 10px !important; }
+      .ma-header { padding: 0 14px !important; }
+      .ma-main   { padding: 16px 12px !important; }
+      .history-grid { grid-template-columns: auto 1fr auto !important; }
+      .history-grid .hide-mobile { display: none !important; }
+      .scan-grid { grid-template-columns: auto 1fr auto !important; }
+      .scan-grid .hide-mobile { display: none !important; }
     }
   </style>
 </head>
@@ -33,44 +84,150 @@ const { useState, useEffect, useCallback } = React;
 
 const API = url => fetch(url).then(r => r.json());
 
-const STATUS_COLORS = {
-  LIVE: { bg: "#e0f2e8", color: "#1a6b38", border: "#1a6b38" },
-  DEMO: { bg: "#dce8f8", color: "#1a4a8a", border: "#1a4a8a" },
-  NOT_CONFIGURED: { bg: "#f4edd8", color: "#7a5a00", border: "#d8caa8" },
-  AUTHORIZATION_REQUIRED: { bg: "#fce8ec", color: "#c8102e", border: "#c8102e" },
-  ERROR: { bg: "#fce8ec", color: "#c8102e", border: "#c8102e" },
-  STALE: { bg: "#fff3cd", color: "#7a5a00", border: "#7a5a00" },
-  SKIPPED: { bg: "#f4edd8", color: "#8a7a60", border: "#d8caa8" },
+/* ─── Design tokens ─────────────────────────────────────────── */
+const STATUS_C = {
+  LIVE:                   { bg:"var(--green-bg)", color:"var(--green)",  border:"var(--green-br)" },
+  DEMO:                   { bg:"var(--blue-bg)",  color:"var(--blue)",   border:"var(--blue-br)"  },
+  NOT_CONFIGURED:         { bg:"var(--surface2)", color:"var(--muted)",  border:"var(--border2)"  },
+  AUTHORIZATION_REQUIRED: { bg:"var(--red-bg)",   color:"var(--red)",    border:"var(--red-br)"   },
+  ERROR:                  { bg:"var(--red-bg)",   color:"var(--red)",    border:"var(--red-br)"   },
+  STALE:                  { bg:"var(--amber-bg)", color:"var(--amber)",  border:"var(--amber-br)" },
+  SKIPPED:                { bg:"var(--surface2)", color:"var(--muted)",  border:"var(--border)"   },
 };
+const STATUS_LABELS = {
+  LIVE:"● Live", DEMO:"◎ Demo", NOT_CONFIGURED:"○ Not configured",
+  AUTHORIZATION_REQUIRED:"✕ Auth required", ERROR:"⚠ Error", STALE:"⏱ Stale", SKIPPED:"— Skipped",
+};
+const CONFIRMED_C = { bg:"var(--green-bg)", color:"var(--green)", border:"var(--green-br)" };
+const POSSIBLE_C  = { bg:"var(--amber-bg)", color:"var(--amber)", border:"var(--amber-br)" };
 
-function StatusBadge({ status, label }) {
-  const c = STATUS_COLORS[status] || STATUS_COLORS.NOT_CONFIGURED;
+/* ─── Primitives ─────────────────────────────────────────────── */
+function Pill({ bg, color, border, children, style={} }) {
   return (
-    <span style={{background:c.bg,color:c.color,border:`1px solid ${c.border}`,borderRadius:4,padding:"2px 8px",fontSize:10,fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.06em",display:"inline-block"}}>
-      {label || status}
+    <span style={{background:bg,color,border:`1px solid ${border}`,borderRadius:999,
+      padding:"2px 10px",fontSize:11,fontWeight:600,letterSpacing:"0.01em",
+      display:"inline-flex",alignItems:"center",gap:4,lineHeight:1.7,...style}}>
+      {children}
     </span>
   );
+}
+
+function StatusBadge({ status }) {
+  const c = STATUS_C[status] || STATUS_C.NOT_CONFIGURED;
+  return <Pill {...c}>{STATUS_LABELS[status] || status}</Pill>;
 }
 
 function ClassBadge({ cls }) {
-  const c = cls === "CONFIRMED"
-    ? { bg: "#e0f2e8", color: "#1a6b38", border: "#1a6b38" }
-    : { bg: "#fff3cd", color: "#7a5a00", border: "#7a5a00" };
+  const c = cls === "CONFIRMED" ? CONFIRMED_C : POSSIBLE_C;
+  return <Pill {...c}>{cls === "CONFIRMED" ? "●" : "◐"} {cls}</Pill>;
+}
+
+function Btn({ onClick, children, variant="default", disabled, style={}, title }) {
+  const V = {
+    primary: {background:"var(--accent)",   color:"#fff",           border:"none"},
+    success: {background:"var(--green)",    color:"#fff",           border:"none"},
+    danger:  {background:"var(--red-bg)",   color:"var(--red)",     border:"1.5px solid var(--red-br)"},
+    ghost:   {background:"transparent",     color:"var(--text2)",   border:"1.5px solid var(--border2)"},
+    default: {background:"var(--surface2)", color:"var(--text2)",   border:"1.5px solid var(--border2)"},
+  }[variant];
   return (
-    <span style={{background:c.bg,color:c.color,border:`1px solid ${c.border}`,borderRadius:4,padding:"2px 8px",fontSize:10,fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.06em",display:"inline-block"}}>
-      {cls}
-    </span>
+    <button onClick={onClick} disabled={disabled} title={title} style={{
+      ...V, padding:"7px 14px", borderRadius:8, fontSize:13, fontWeight:600,
+      cursor:disabled?"not-allowed":"pointer", opacity:disabled?0.5:1,
+      display:"inline-flex", alignItems:"center", gap:5,
+      transition:"opacity 0.1s", whiteSpace:"nowrap", ...style,
+    }}>
+      {children}
+    </button>
   );
 }
 
-const inputStyle = { width:"100%",padding:"9px 11px",border:"1.5px solid #d8caa8",borderRadius:7,fontSize:13,color:"#12243d",background:"#fdfaf2",outline:"none" };
-const labelStyle = { display:"block",fontSize:9,color:"#a89878",letterSpacing:"0.12em",marginBottom:4,fontFamily:"Oswald,sans-serif",fontWeight:600 };
+function Loader() {
+  return (
+    <div style={{padding:48,textAlign:"center"}}>
+      <div style={{display:"inline-block",width:22,height:22,border:"2.5px solid var(--border2)",
+        borderTopColor:"var(--accent)",borderRadius:"50%",animation:"spin 0.65s linear infinite"}} />
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, sub }) {
+  return (
+    <div style={{background:"var(--surface)",border:"1.5px dashed var(--border2)",borderRadius:14,
+      padding:"52px 24px",textAlign:"center"}}>
+      <div style={{fontSize:38,marginBottom:14,color:"var(--border2)"}}>{icon}</div>
+      <div style={{fontSize:15,fontWeight:700,color:"var(--text)",marginBottom:6}}>{title}</div>
+      <div style={{fontSize:12.5,color:"var(--muted)"}}>{sub}</div>
+    </div>
+  );
+}
+
+function PageHeader({ title, sub, children }) {
+  return (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+      marginBottom:22,flexWrap:"wrap",gap:12}}>
+      <div>
+        <h2 style={{fontSize:21,fontWeight:700,color:"var(--text)",letterSpacing:"-0.02em"}}>{title}</h2>
+        {sub && <p style={{color:"var(--muted)",fontSize:12,marginTop:2}}>{sub}</p>}
+      </div>
+      {children && <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>{children}</div>}
+    </div>
+  );
+}
+
+function Card({ children, style={} }) {
+  return (
+    <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,
+      boxShadow:"0 1px 3px rgba(0,0,0,0.06)",overflow:"hidden",...style}}>
+      {children}
+    </div>
+  );
+}
+
+function CardHeader({ children }) {
+  return (
+    <div style={{padding:"10px 20px",borderBottom:"1px solid var(--border)",
+      background:"var(--surface2)",fontSize:11.5,color:"var(--muted)",fontWeight:600}}>
+      {children}
+    </div>
+  );
+}
+
+function SegmentedControl({ options, value, onChange }) {
+  return (
+    <div style={{display:"flex",background:"var(--surface)",border:"1.5px solid var(--border2)",
+      borderRadius:8,overflow:"hidden",flexShrink:0}}>
+      {options.map((opt, i) => (
+        <button key={opt} onClick={() => onChange(opt)} style={{
+          padding:"5px 14px", fontSize:12.5, fontWeight:600, cursor:"pointer",
+          background: value===opt ? "var(--accent)" : "transparent",
+          color: value===opt ? "#fff" : "var(--text2)",
+          border:"none", borderLeft: i>0 ? "1px solid var(--border2)" : "none",
+          transition:"background 0.15s, color 0.15s",
+        }}>
+          {opt}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ─── Form helpers ───────────────────────────────────────────── */
+const inp = {
+  width:"100%", padding:"9px 12px",
+  border:"1.5px solid var(--border2)", borderRadius:8,
+  fontSize:13.5, color:"var(--text)", background:"var(--surface)", outline:"none",
+};
+const lbl = {
+  display:"block", fontSize:11.5, color:"var(--text2)",
+  fontWeight:600, marginBottom:5,
+};
 
 const EMPTY_FORM = {
-  name: "", enabled: true, keywords: "", keyword_alts: "", brand: "",
-  product_type: "", price_min: "", price_max: "", center_label: "Cincinnati, OH",
-  center_lat: 39.1031, center_lon: -84.5120, radius_miles: 75,
-  exclude_keywords: "", notify_email: true,
+  name:"", enabled:true, keywords:"", keyword_alts:"", brand:"",
+  product_type:"", price_min:"", price_max:"", center_label:"Cincinnati, OH",
+  center_lat:39.1031, center_lon:-84.5120, radius_miles:75,
+  exclude_keywords:"", notify_email:true,
 };
 
 function SearchModal({ initial, onSave, onClose }) {
@@ -81,11 +238,11 @@ function SearchModal({ initial, onSave, onClose }) {
     setSaving(true);
     const payload = {
       ...form,
-      keywords: form.keywords.split(",").map(k => k.trim()).filter(Boolean),
-      keyword_alts: form.keyword_alts ? form.keyword_alts.split(",").map(k => k.trim()).filter(Boolean) : [],
-      exclude_keywords: form.exclude_keywords ? form.exclude_keywords.split(",").map(k => k.trim()).filter(Boolean) : [],
-      price_min: form.price_min !== "" ? parseFloat(form.price_min) : null,
-      price_max: form.price_max !== "" ? parseFloat(form.price_max) : null,
+      keywords:         form.keywords.split(",").map(k=>k.trim()).filter(Boolean),
+      keyword_alts:     form.keyword_alts ? form.keyword_alts.split(",").map(k=>k.trim()).filter(Boolean) : [],
+      exclude_keywords: form.exclude_keywords ? form.exclude_keywords.split(",").map(k=>k.trim()).filter(Boolean) : [],
+      price_min:  form.price_min  !== "" ? parseFloat(form.price_min)  : null,
+      price_max:  form.price_max  !== "" ? parseFloat(form.price_max)  : null,
       center_lat: parseFloat(form.center_lat),
       center_lon: parseFloat(form.center_lon),
       radius_miles: parseFloat(form.radius_miles),
@@ -94,169 +251,205 @@ function SearchModal({ initial, onSave, onClose }) {
     setSaving(false);
   }
 
-  const F = (key, label, props = {}) => (
+  const F = (key, label, props={}) => (
     <div style={{marginBottom:14}}>
-      <label style={labelStyle}>{label}</label>
-      <input value={form[key]} onChange={e => setForm({...form,[key]:e.target.value})} style={inputStyle} {...props} />
+      <label style={lbl}>{label}</label>
+      <input value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})} style={inp} {...props} />
     </div>
   );
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(18,36,61,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
-      <div style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:12,padding:"24px 28px",width:"min(560px,96vw)",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(18,36,61,0.18)"}}>
-        <div style={{fontSize:14,fontFamily:"Oswald,sans-serif",fontWeight:700,color:"#12243d",letterSpacing:"0.06em",marginBottom:20}}>
-          {initial ? "EDIT SEARCH" : "NEW SAVED SEARCH"}
+    <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",display:"flex",
+      alignItems:"center",justifyContent:"center",zIndex:1000,backdropFilter:"blur(4px)"}}>
+      <div style={{background:"var(--surface)",borderRadius:16,padding:"28px 32px",
+        width:"min(560px,96vw)",maxHeight:"90vh",overflowY:"auto",
+        boxShadow:"0 24px 64px rgba(0,0,0,0.28)",border:"1px solid var(--border)",
+        animation:"slide-in 0.18s ease-out"}}>
+        <div style={{fontSize:16,fontWeight:700,color:"var(--text)",marginBottom:24,letterSpacing:"-0.01em"}}>
+          {initial ? "Edit search" : "New saved search"}
         </div>
-        {F("name", "SEARCH NAME")}
+
+        {F("name", "Name")}
+
         <div style={{marginBottom:14}}>
-          <label style={labelStyle}>KEYWORDS <span style={{fontWeight:400,color:"#a89878"}}>(comma-separated)</span></label>
-          <input value={form.keywords} onChange={e => setForm({...form,keywords:e.target.value})} style={inputStyle} placeholder="e.g. Mac Studio, Apple Mac Studio" />
+          <label style={lbl}>Keywords <span style={{fontWeight:400,color:"var(--muted)"}}>comma-separated</span></label>
+          <input value={form.keywords} onChange={e=>setForm({...form,keywords:e.target.value})}
+            style={inp} placeholder="e.g. Mac Studio, Apple Mac Studio" />
         </div>
+
         <div style={{marginBottom:14}}>
-          <label style={labelStyle}>KEYWORD ALTERNATIVES <span style={{fontWeight:400,color:"#a89878"}}>(optional)</span></label>
-          <input value={form.keyword_alts} onChange={e => setForm({...form,keyword_alts:e.target.value})} style={inputStyle} placeholder="e.g. M1 Ultra Mac Studio" />
+          <label style={lbl}>Alternative keywords <span style={{fontWeight:400,color:"var(--muted)"}}>optional</span></label>
+          <input value={form.keyword_alts} onChange={e=>setForm({...form,keyword_alts:e.target.value})}
+            style={inp} placeholder="e.g. M1 Ultra Mac Studio" />
         </div>
+
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
           <div>
-            <label style={labelStyle}>MIN PRICE</label>
-            <input type="number" value={form.price_min} onChange={e => setForm({...form,price_min:e.target.value})} style={inputStyle} placeholder="no minimum" />
+            <label style={lbl}>Min price</label>
+            <input type="number" value={form.price_min}
+              onChange={e=>setForm({...form,price_min:e.target.value})} style={inp} placeholder="no minimum" />
           </div>
           <div>
-            <label style={labelStyle}>MAX PRICE <span style={{fontWeight:400,color:"#a89878"}}>(strict &lt;)</span></label>
-            <input type="number" value={form.price_max} onChange={e => setForm({...form,price_max:e.target.value})} style={inputStyle} placeholder="no maximum" />
+            <label style={lbl}>Max price <span style={{fontWeight:400,color:"var(--muted)"}}>strict &lt;</span></label>
+            <input type="number" value={form.price_max}
+              onChange={e=>setForm({...form,price_max:e.target.value})} style={inp} placeholder="no maximum" />
           </div>
         </div>
+
         <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:10,marginBottom:14}}>
           <div>
-            <label style={labelStyle}>SEARCH CENTER</label>
-            <input value={form.center_label} onChange={e => setForm({...form,center_label:e.target.value})} style={inputStyle} placeholder="Cincinnati, OH" />
+            <label style={lbl}>Search center</label>
+            <input value={form.center_label} onChange={e=>setForm({...form,center_label:e.target.value})}
+              style={inp} placeholder="Cincinnati, OH" />
           </div>
           <div>
-            <label style={labelStyle}>RADIUS (MILES)</label>
-            <input type="number" value={form.radius_miles} onChange={e => setForm({...form,radius_miles:e.target.value})} style={inputStyle} />
+            <label style={lbl}>Radius (mi)</label>
+            <input type="number" value={form.radius_miles}
+              onChange={e=>setForm({...form,radius_miles:e.target.value})} style={inp} />
           </div>
         </div>
+
         <div style={{marginBottom:14}}>
-          <label style={labelStyle}>EXCLUDE KEYWORDS <span style={{fontWeight:400,color:"#a89878"}}>(comma-separated)</span></label>
-          <input value={form.exclude_keywords} onChange={e => setForm({...form,exclude_keywords:e.target.value})} style={inputStyle} placeholder="e.g. Studio Display, MacBook, broken" />
+          <label style={lbl}>Exclude keywords <span style={{fontWeight:400,color:"var(--muted)"}}>comma-separated</span></label>
+          <input value={form.exclude_keywords} onChange={e=>setForm({...form,exclude_keywords:e.target.value})}
+            style={inp} placeholder="e.g. Studio Display, MacBook, broken" />
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:20}}>
-          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer"}}>
-            <input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})} />
-            <span style={{fontSize:12,color:"#12243d"}}>Enabled</span>
+
+        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:26}}>
+          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13}}>
+            <input type="checkbox" checked={form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})} />
+            Enabled
           </label>
-          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer"}}>
-            <input type="checkbox" checked={form.notify_email} onChange={e => setForm({...form,notify_email:e.target.checked})} />
-            <span style={{fontSize:12,color:"#12243d"}}>Email on confirmed match</span>
+          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13}}>
+            <input type="checkbox" checked={form.notify_email} onChange={e=>setForm({...form,notify_email:e.target.checked})} />
+            Email on confirmed match
           </label>
         </div>
+
         <div style={{display:"flex",gap:10}}>
-          <button onClick={onClose} style={{flex:1,background:"#f4edd8",border:"1.5px solid #d4c4a0",color:"#6a5a40",padding:"10px 0",borderRadius:7,cursor:"pointer",fontFamily:"Oswald,sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.08em"}}>CANCEL</button>
-          <button onClick={save} disabled={saving||!form.name||!form.keywords} style={{flex:2,background:"#12243d",border:"none",color:"#f2ead8",padding:"10px 0",borderRadius:7,cursor:"pointer",fontFamily:"Oswald,sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.08em",opacity:saving||!form.name||!form.keywords?0.6:1}}>
-            {saving ? "SAVING…" : initial ? "UPDATE SEARCH" : "SAVE SEARCH"}
-          </button>
+          <Btn onClick={onClose} variant="ghost" style={{flex:1,justifyContent:"center"}}>Cancel</Btn>
+          <Btn onClick={save} variant="primary" disabled={saving||!form.name||!form.keywords}
+            style={{flex:2,justifyContent:"center"}}>
+            {saving ? "Saving…" : initial ? "Update search" : "Save search"}
+          </Btn>
         </div>
       </div>
     </div>
   );
 }
 
+/* ─── Searches view ──────────────────────────────────────────── */
 function SearchesView({ onCheckNow }) {
   const [searches, setSearches] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState(null); // null | "new" | search object
+  const [modal, setModal] = useState(null);
+  const [checking, setChecking] = useState({});
 
   const load = useCallback(() => {
     setLoading(true);
     API("/api/searches").then(d => { setSearches(d); setLoading(false); });
   }, []);
-
   useEffect(() => { load(); }, [load]);
 
   async function saveSearch(payload) {
     if (modal && modal.id) {
-      await fetch(`/api/searches/${modal.id}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
+      await fetch(`/api/searches/${modal.id}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     } else {
-      await fetch("/api/searches", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
+      await fetch("/api/searches", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     }
-    setModal(null);
-    load();
+    setModal(null); load();
   }
 
   async function deleteSearch(id) {
     if (!confirm("Delete this saved search?")) return;
-    await fetch(`/api/searches/${id}`, { method:"DELETE" });
+    await fetch(`/api/searches/${id}`, {method:"DELETE"});
     load();
   }
 
   async function toggleSearch(s) {
-    await fetch(`/api/searches/${s.id}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ enabled: !s.enabled }) });
+    await fetch(`/api/searches/${s.id}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!s.enabled})});
+    load();
+  }
+
+  async function handleCheck(id) {
+    setChecking(c => ({...c,[id]:true}));
+    await onCheckNow(id);
+    setChecking(c => ({...c,[id]:false}));
     load();
   }
 
   function editForm(s) {
     return {
-      name: s.name, enabled: s.enabled, notify_email: s.notify_email,
-      keywords: (s.keywords||[]).join(", "),
-      keyword_alts: (s.keyword_alts||[]).join(", "),
-      exclude_keywords: (s.exclude_keywords||[]).join(", "),
-      price_min: s.price_min ?? "", price_max: s.price_max ?? "",
-      center_label: s.center_label, center_lat: s.center_lat, center_lon: s.center_lon,
-      radius_miles: s.radius_miles,
+      name:s.name, enabled:s.enabled, notify_email:s.notify_email,
+      keywords:(s.keywords||[]).join(", "),
+      keyword_alts:(s.keyword_alts||[]).join(", "),
+      exclude_keywords:(s.exclude_keywords||[]).join(", "),
+      price_min:s.price_min??"", price_max:s.price_max??"",
+      center_label:s.center_label, center_lat:s.center_lat, center_lon:s.center_lon,
+      radius_miles:s.radius_miles,
     };
   }
 
-  if (loading) return <div style={{padding:40,textAlign:"center",color:"#8a7a60"}}>Loading…</div>;
+  if (loading) return <Loader />;
 
   return (
     <div>
       {modal !== null && (
-        <SearchModal
-          initial={modal === "new" ? null : editForm(modal)}
-          onSave={saveSearch}
-          onClose={() => setModal(null)}
-        />
+        <SearchModal initial={modal==="new"?null:editForm(modal)} onSave={saveSearch} onClose={()=>setModal(null)} />
       )}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-        <div>
-          <h2 style={{fontSize:26,color:"#12243d",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.03em"}}>Saved Searches</h2>
-          <p style={{color:"#8a7a60",fontSize:12,marginTop:2}}>{searches.length} search{searches.length!==1?"es":""} configured</p>
-        </div>
-        <button onClick={() => setModal("new")} style={{background:"#12243d",color:"#f2ead8",border:"none",padding:"9px 20px",borderRadius:7,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"Oswald,sans-serif",letterSpacing:"0.1em"}}>+ NEW SEARCH</button>
-      </div>
+
+      <PageHeader title="Watchlist" sub={`${searches.length} saved search${searches.length!==1?"es":""}`}>
+        <Btn onClick={()=>setModal("new")} variant="primary">+ Add search</Btn>
+      </PageHeader>
 
       {searches.length === 0 ? (
-        <div style={{background:"#fdfaf2",border:"1.5px dashed #d8caa8",borderRadius:12,padding:"40px 24px",textAlign:"center"}}>
-          <div style={{fontSize:32,marginBottom:12}}>🔍</div>
-          <div style={{fontSize:16,fontFamily:"Oswald,sans-serif",fontWeight:700,color:"#12243d",marginBottom:8}}>NO SEARCHES YET</div>
-          <div style={{fontSize:12,color:"#8a7a60"}}>Create a saved search to start monitoring marketplaces.</div>
-        </div>
+        <EmptyState icon="◎" title="Nothing on your watchlist" sub="Add a saved search to start monitoring marketplaces for deals." />
       ) : searches.map(s => (
-        <div key={s.id} style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:10,padding:"16px 20px",marginBottom:12,boxShadow:"0 1px 4px rgba(26,42,61,0.05)"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
-            <div>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                <span style={{fontFamily:"Oswald,sans-serif",fontWeight:700,fontSize:16,color:"#12243d"}}>{s.name}</span>
-                <span style={{background:s.enabled?"#e0f2e8":"#f4edd8",color:s.enabled?"#1a6b38":"#8a7a60",border:`1px solid ${s.enabled?"#1a6b38":"#d8caa8"}`,borderRadius:4,padding:"1px 7px",fontSize:9,fontFamily:"Oswald,sans-serif",fontWeight:700}}>{s.enabled?"ACTIVE":"PAUSED"}</span>
-                <span style={{background:"#f4edd8",border:"1px solid #d8caa8",borderRadius:4,padding:"1px 7px",fontSize:9,color:"#8a7a60",fontFamily:"Oswald,sans-serif"}}>{s.match_count || 0} matches</span>
+        <div key={s.id} style={{
+          background:"var(--surface)", borderRadius:12, padding:"18px 20px", marginBottom:10,
+          boxShadow:"0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)",
+          border:"1px solid var(--border)",
+          borderLeft:`4px solid ${s.enabled?"var(--green)":"var(--border2)"}`,
+          transition:"box-shadow 0.15s",
+        }}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,flexWrap:"wrap"}}>
+                <span style={{fontWeight:700,fontSize:15,color:"var(--text)",letterSpacing:"-0.01em"}}>{s.name}</span>
+                <Pill bg={s.enabled?"var(--green-bg)":"var(--surface2)"}
+                  color={s.enabled?"var(--green)":"var(--muted)"}
+                  border={s.enabled?"var(--green-br)":"var(--border2)"}>
+                  {s.enabled?"● Active":"○ Paused"}
+                </Pill>
+                {(s.match_count||0) > 0 && (
+                  <Pill bg="var(--blue-bg)" color="var(--blue)" border="var(--blue-br)">
+                    {s.match_count} match{s.match_count!==1?"es":""}
+                  </Pill>
+                )}
               </div>
-              <div style={{fontSize:11,color:"#8a7a60",lineHeight:1.8}}>
-                <span style={{marginRight:14}}>📍 {s.center_label} · {s.radius_miles}mi</span>
-                {s.price_max != null && <span style={{marginRight:14}}>💰 under ${s.price_max}</span>}
-                {s.price_min != null && <span style={{marginRight:14}}>💰 min ${s.price_min}</span>}
-                {s.last_checked && <span>🕐 checked {new Date(s.last_checked).toLocaleString()}</span>}
+
+              <div style={{fontSize:12,color:"var(--text2)",display:"flex",flexWrap:"wrap",gap:"2px 16px",marginBottom:10}}>
+                <span>{s.center_label} · {s.radius_miles} mi</span>
+                {s.price_max != null && <span>Under ${s.price_max.toLocaleString()}</span>}
+                {s.price_min != null && <span>Min ${s.price_min.toLocaleString()}</span>}
+                {s.last_checked && <span style={{color:"var(--muted)"}}>Last scan {new Date(s.last_checked).toLocaleString()}</span>}
               </div>
-              <div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:4}}>
+
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
                 {(s.keywords||[]).map(k => (
-                  <span key={k} style={{background:"#f0e8d4",border:"1px solid #d8caa8",borderRadius:4,padding:"1px 7px",fontSize:10,color:"#6a5a40"}}>{k}</span>
+                  <span key={k} style={{background:"var(--surface2)",border:"1px solid var(--border)",
+                    borderRadius:6,padding:"2px 8px",fontSize:11.5,color:"var(--text2)"}}>{k}</span>
                 ))}
               </div>
             </div>
-            <div style={{display:"flex",gap:6,flexShrink:0}}>
-              <button onClick={() => onCheckNow(s.id)} title="Check now" style={{background:"#1a6b38",color:"#fff",border:"none",padding:"7px 12px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.06em"}}>CHECK</button>
-              <button onClick={() => toggleSearch(s)} style={{background:s.enabled?"#f4edd8":"#e0f2e8",color:s.enabled?"#8a7a60":"#1a6b38",border:"1.5px solid #d8caa8",padding:"7px 12px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.06em"}}>{s.enabled?"PAUSE":"RESUME"}</button>
-              <button onClick={() => setModal({...s,...editForm(s)})} style={{background:"#f4edd8",color:"#6a5a40",border:"1.5px solid #d4c4a0",padding:"7px 12px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.06em"}}>EDIT</button>
-              <button onClick={() => deleteSearch(s.id)} style={{background:"#fce8ec",color:"#c8102e",border:"1.5px solid #c8102e40",padding:"7px 12px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"Oswald,sans-serif",fontWeight:700}}>✕</button>
+
+            <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
+              <Btn onClick={()=>handleCheck(s.id)} variant="success" disabled={checking[s.id]}>
+                {checking[s.id]?"Scanning…":"Scan now"}
+              </Btn>
+              <Btn onClick={()=>toggleSearch(s)} variant="ghost">{s.enabled?"Pause":"Resume"}</Btn>
+              <Btn onClick={()=>setModal({...s,...editForm(s)})} variant="ghost">Edit</Btn>
+              <Btn onClick={()=>deleteSearch(s.id)} variant="danger" title="Delete">✕</Btn>
             </div>
           </div>
         </div>
@@ -265,93 +458,95 @@ function SearchesView({ onCheckNow }) {
   );
 }
 
+/* ─── Listings view ──────────────────────────────────────────── */
 function ListingsView() {
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterClass, setFilterClass] = useState("ALL");
-  const [filterSource, setFilterSource] = useState("ALL");
   const [sort, setSort] = useState("newest");
-  const [searches, setSearches] = useState([]);
-  const [filterSearch, setFilterSearch] = useState("ALL");
-
-  useEffect(() => {
-    API("/api/searches").then(setSearches);
-  }, []);
 
   useEffect(() => {
     setLoading(true);
     let url = `/api/listings?sort=${sort}`;
     if (filterClass !== "ALL") url += `&classification=${filterClass}`;
-    if (filterSource !== "ALL") url += `&source=${filterSource}`;
-    if (filterSearch !== "ALL") url += `&search_id=${filterSearch}`;
     API(url).then(d => { setListings(d); setLoading(false); });
-  }, [filterClass, filterSource, sort, filterSearch]);
+  }, [filterClass, sort]);
 
   const fmtPrice = p => p != null ? `$${Number(p).toLocaleString()}` : "—";
-  const fmtDate = d => d ? new Date(d).toLocaleDateString() : "—";
+  const fmtDate  = d => d ? new Date(d).toLocaleDateString() : "—";
 
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
-        <div>
-          <h2 style={{fontSize:26,color:"#12243d",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.03em"}}>Matching Listings</h2>
-          <p style={{color:"#8a7a60",fontSize:12,marginTop:2}}>{listings.length} listing{listings.length!==1?"s":""}</p>
-        </div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          {["ALL","CONFIRMED","POSSIBLE"].map(c => (
-            <button key={c} onClick={() => setFilterClass(c)} style={{background:filterClass===c?"#12243d":"#f4edd8",color:filterClass===c?"#f2ead8":"#6a5a40",border:"1.5px solid #d4c4a0",padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.06em"}}>{c}</button>
-          ))}
-          <select value={sort} onChange={e => setSort(e.target.value)} style={{border:"1.5px solid #d8caa8",borderRadius:6,padding:"6px 10px",fontSize:11,background:"#fdfaf2",color:"#12243d"}}>
-            <option value="newest">Newest First</option>
-            <option value="price_asc">Lowest Price</option>
-            <option value="price_desc">Highest Price</option>
+      <PageHeader title="Listings" sub={`${listings.length} match${listings.length!==1?"es":""}`}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <SegmentedControl options={["ALL","CONFIRMED","POSSIBLE"]} value={filterClass} onChange={setFilterClass} />
+          <select value={sort} onChange={e=>setSort(e.target.value)} style={{
+            border:"1.5px solid var(--border2)",borderRadius:8,padding:"6px 10px",
+            fontSize:12.5,background:"var(--surface)",color:"var(--text)",cursor:"pointer"}}>
+            <option value="newest">Newest first</option>
+            <option value="price_asc">Price: low → high</option>
+            <option value="price_desc">Price: high → low</option>
           </select>
         </div>
-      </div>
+      </PageHeader>
 
-      {loading ? (
-        <div style={{padding:40,textAlign:"center",color:"#8a7a60"}}>Loading…</div>
-      ) : listings.length === 0 ? (
-        <div style={{background:"#fdfaf2",border:"1.5px dashed #d8caa8",borderRadius:12,padding:"40px 24px",textAlign:"center"}}>
-          <div style={{fontSize:32,marginBottom:12}}>📭</div>
-          <div style={{fontSize:16,fontFamily:"Oswald,sans-serif",fontWeight:700,color:"#12243d",marginBottom:8}}>NO MATCHES YET</div>
-          <div style={{fontSize:12,color:"#8a7a60"}}>Run a search check to discover matching listings.</div>
-        </div>
+      {loading ? <Loader /> : listings.length === 0 ? (
+        <EmptyState icon="◎" title="No matches yet" sub="Run a scan to discover matching listings." />
       ) : (
         <>
           {["CONFIRMED","POSSIBLE"].map(cls => {
-            const group = listings.filter(l => filterClass === "ALL" ? l.classification === cls : l.classification === filterClass && l.classification === cls);
-            if (filterClass !== "ALL" && filterClass !== cls) return null;
+            const group = listings.filter(l =>
+              filterClass==="ALL" ? l.classification===cls : l.classification===filterClass && l.classification===cls
+            );
+            if (filterClass!=="ALL" && filterClass!==cls) return null;
             if (!group.length) return null;
             return (
               <div key={cls} style={{marginBottom:28}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
                   <ClassBadge cls={cls} />
-                  <span style={{fontSize:12,color:"#8a7a60"}}>{group.length} listing{group.length!==1?"s":""}</span>
+                  <span style={{fontSize:12,color:"var(--muted)"}}>{group.length} listing{group.length!==1?"s":""}</span>
                 </div>
                 {group.map(l => (
-                  <div key={`${l.id}-${l.search_id}`} style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:10,padding:"14px 18px",marginBottom:10,display:"flex",gap:14,alignItems:"flex-start"}}>
+                  <div key={`${l.id}-${l.search_id}`} style={{
+                    background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,
+                    padding:"16px 20px",marginBottom:8,display:"flex",gap:16,alignItems:"flex-start",
+                    boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}>
                     {l.image_url && (
-                      <img src={l.image_url} alt="" style={{width:72,height:72,objectFit:"cover",borderRadius:6,flexShrink:0}} onError={e => e.target.style.display="none"} />
+                      <img src={l.image_url} alt="" style={{width:72,height:72,objectFit:"cover",
+                        borderRadius:8,flexShrink:0,border:"1px solid var(--border)"}}
+                        onError={e=>e.target.style.display="none"} />
                     )}
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap",marginBottom:4}}>
-                        <a href={l.listing_url} target="_blank" rel="noreferrer" style={{fontFamily:"Oswald,sans-serif",fontWeight:700,fontSize:15,color:"#12243d",textDecoration:"none",flex:1}}>{l.title}</a>
-                        <span style={{fontWeight:700,fontSize:17,color:"#12243d",flexShrink:0}}>{fmtPrice(l.price)}</span>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+                        gap:12,marginBottom:5,flexWrap:"wrap"}}>
+                        <a href={l.listing_url} target="_blank" rel="noreferrer"
+                          style={{fontWeight:600,fontSize:14.5,color:"var(--text)",textDecoration:"none",
+                          letterSpacing:"-0.01em"}}>
+                          {l.title}
+                        </a>
+                        <span style={{fontWeight:700,fontSize:22,color:"var(--accent)",flexShrink:0,
+                          fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
+                          {fmtPrice(l.price)}
+                        </span>
                       </div>
-                      <div style={{fontSize:11,color:"#8a7a60",marginBottom:6,display:"flex",gap:12,flexWrap:"wrap"}}>
-                        <span>📍 {l.location_text || "Location unknown"}</span>
-                        <span>🏷 {l.source_name}</span>
-                        <span>🔍 {l.search_name}</span>
-                        <span>📅 found {fmtDate(l.first_matched)}</span>
+                      <div style={{fontSize:12,color:"var(--muted)",marginBottom:9,display:"flex",
+                        gap:12,flexWrap:"wrap"}}>
+                        <span>{l.location_text||"Location unknown"}</span>
+                        <span>{l.source_name}</span>
+                        <span>{l.search_name}</span>
+                        <span>Found {fmtDate(l.first_matched)}</span>
                       </div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:6}}>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:9}}>
                         {(l.reasons||[]).map((r,i) => (
-                          <span key={i} style={{background:"#f0e8d4",border:"1px solid #d8caa8",borderRadius:4,padding:"1px 7px",fontSize:10,color:"#6a5a40"}}>{r}</span>
+                          <span key={i} style={{background:"var(--surface2)",border:"1px solid var(--border)",
+                            borderRadius:6,padding:"2px 8px",fontSize:11,color:"var(--text2)"}}>{r}</span>
                         ))}
                       </div>
                       {l.listing_url && (
-                        <a href={l.listing_url} target="_blank" rel="noreferrer" style={{fontSize:11,color:"#1a4a8a",textDecoration:"none"}}>View on {l.source_name} ↗</a>
+                        <a href={l.listing_url} target="_blank" rel="noreferrer"
+                          style={{fontSize:12,color:"var(--accent)",textDecoration:"none",fontWeight:600}}>
+                          View listing →
+                        </a>
                       )}
                     </div>
                   </div>
@@ -365,67 +560,84 @@ function ListingsView() {
   );
 }
 
+/* ─── History view ───────────────────────────────────────────── */
 function HistoryView() {
   const [history, setHistory] = useState([]);
-  const [scans, setScans] = useState([]);
+  const [scans, setScans]     = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([API("/api/alerts/history"), API("/api/scans")]).then(([h, s]) => {
+    Promise.all([API("/api/alerts/history"), API("/api/scans")]).then(([h,s]) => {
       setHistory(h); setScans(s); setLoading(false);
     });
   }, []);
 
-  const fmtDate = d => d ? new Date(d).toLocaleString() : "—";
+  const fmtDate  = d => d ? new Date(d).toLocaleString() : "—";
   const fmtPrice = p => p != null ? `$${Number(p).toLocaleString()}` : "—";
 
-  if (loading) return <div style={{padding:40,textAlign:"center",color:"#8a7a60"}}>Loading…</div>;
+  if (loading) return <Loader />;
 
   return (
     <div>
-      <h2 style={{fontSize:26,color:"#12243d",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.03em",marginBottom:20}}>Alert History</h2>
+      <PageHeader title="History" sub="Match and scan records" />
 
-      <div style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:12,overflow:"hidden",marginBottom:28}}>
-        <div style={{padding:"11px 18px",background:"#f4edd8",borderBottom:"1px solid #e8dcc8"}}>
-          <span style={{fontSize:10,color:"#8a7a60",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.1em"}}>MATCHED LISTINGS · {history.length} RECORDS</span>
-        </div>
+      <Card style={{marginBottom:20}}>
+        <CardHeader>Matched listings · {history.length} records</CardHeader>
         {history.length === 0 ? (
-          <div style={{padding:24,textAlign:"center",color:"#a89878",fontSize:12}}>No match history yet.</div>
-        ) : history.slice(0, 50).map((h, i) => (
-          <div key={h.id} style={{display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",gap:12,padding:"12px 18px",borderBottom:i<history.length-1?"1px solid #e8dcc8":"none",background:i%2===0?"#fdfaf2":"#f8f2e4",alignItems:"center"}}>
+          <div style={{padding:24,textAlign:"center",color:"var(--muted)",fontSize:13}}>No match history yet.</div>
+        ) : history.slice(0,50).map((h,i) => (
+          <div key={h.id} className="history-grid" style={{
+            display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",
+            gap:12,padding:"11px 20px",borderTop:i>0?"1px solid var(--border)":"none",
+            alignItems:"center",background:i%2===0?"var(--surface)":"var(--surface2)"}}>
             <ClassBadge cls={h.classification} />
             <div>
-              <div style={{fontWeight:600,fontSize:13,color:"#12243d"}}>{h.listing_title}</div>
-              <div style={{fontSize:11,color:"#8a7a60"}}>{h.search_name} · {h.source_name}</div>
+              <div style={{fontWeight:600,fontSize:13,color:"var(--text)"}}>{h.listing_title}</div>
+              <div style={{fontSize:11,color:"var(--muted)"}}>{h.search_name} · {h.source_name}</div>
             </div>
-            <div style={{fontWeight:700,fontSize:14,color:"#12243d",whiteSpace:"nowrap"}}>{fmtPrice(h.price)}</div>
-            <div style={{fontSize:11,color:"#8a7a60",whiteSpace:"nowrap"}}>{fmtDate(h.first_matched)}</div>
-            <div>{h.listing_url ? <a href={h.listing_url} target="_blank" rel="noreferrer" style={{color:"#1a4a8a",fontSize:12}}>View →</a> : "—"}</div>
+            <div style={{fontWeight:700,fontSize:14,color:"var(--accent)",whiteSpace:"nowrap",
+              fontVariantNumeric:"tabular-nums"}}>{fmtPrice(h.price)}</div>
+            <div className="hide-mobile" style={{fontSize:11,color:"var(--muted)",whiteSpace:"nowrap"}}>{fmtDate(h.first_matched)}</div>
+            <div>{h.listing_url
+              ? <a href={h.listing_url} target="_blank" rel="noreferrer"
+                  style={{color:"var(--accent)",fontSize:12,fontWeight:600}}>View →</a>
+              : "—"}</div>
           </div>
         ))}
-      </div>
+      </Card>
 
-      <div style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:12,overflow:"hidden"}}>
-        <div style={{padding:"11px 18px",background:"#f4edd8",borderBottom:"1px solid #e8dcc8"}}>
-          <span style={{fontSize:10,color:"#8a7a60",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.1em"}}>SCAN HISTORY · LAST 50 RUNS</span>
-        </div>
+      <Card>
+        <CardHeader>Scan log · last 50 runs</CardHeader>
         {scans.length === 0 ? (
-          <div style={{padding:24,textAlign:"center",color:"#a89878",fontSize:12}}>No scans yet.</div>
-        ) : scans.map((s, i) => (
-          <div key={s.id} style={{display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",gap:12,padding:"10px 18px",borderBottom:i<scans.length-1?"1px solid #e8dcc8":"none",background:i%2===0?"#fdfaf2":"#f8f2e4",alignItems:"center"}}>
-            <span style={{background:s.status==="ok"?"#e0f2e8":s.status==="running"?"#dce8f8":"#fce8ec",color:s.status==="ok"?"#1a6b38":s.status==="running"?"#1a4a8a":"#c8102e",border:"1px solid currentColor",borderRadius:4,padding:"1px 7px",fontSize:9,fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.06em",display:"inline-block"}}>{s.status.toUpperCase()}</span>
-            <div style={{fontSize:12,color:"#12243d"}}>{s.provider || "scheduled"}{s.error ? ` — ${s.error.substring(0,80)}` : ""}</div>
-            <div style={{fontSize:11,color:"#8a7a60",whiteSpace:"nowrap"}}>{s.result_count || 0} results</div>
-            <div style={{fontSize:11,color:"#8a7a60",whiteSpace:"nowrap"}}>{s.match_count || 0} matches</div>
-            <div style={{fontSize:11,color:"#8a7a60",whiteSpace:"nowrap"}}>{fmtDate(s.started_at)}</div>
-          </div>
-        ))}
-      </div>
+          <div style={{padding:24,textAlign:"center",color:"var(--muted)",fontSize:13}}>No scans yet.</div>
+        ) : scans.map((s,i) => {
+          const sc = s.status==="ok"
+            ? {bg:"var(--green-bg)",color:"var(--green)",border:"var(--green-br)"}
+            : s.status==="running"
+            ? {bg:"var(--blue-bg)", color:"var(--blue)", border:"var(--blue-br)"}
+            : {bg:"var(--red-bg)",  color:"var(--red)",  border:"var(--red-br)"};
+          return (
+            <div key={s.id} className="scan-grid" style={{
+              display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",
+              gap:12,padding:"10px 20px",borderTop:i>0?"1px solid var(--border)":"none",
+              alignItems:"center",background:i%2===0?"var(--surface)":"var(--surface2)"}}>
+              <Pill {...sc}>{s.status}</Pill>
+              <div style={{fontSize:12,color:"var(--text2)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                {s.provider||"scheduled"}{s.error?` — ${s.error.substring(0,80)}`:""}
+              </div>
+              <div className="hide-mobile" style={{fontSize:11,color:"var(--muted)",whiteSpace:"nowrap"}}>{s.result_count||0} results</div>
+              <div className="hide-mobile" style={{fontSize:11,color:"var(--muted)",whiteSpace:"nowrap"}}>{s.match_count||0} matches</div>
+              <div style={{fontSize:11,color:"var(--muted)",whiteSpace:"nowrap"}}>{fmtDate(s.started_at)}</div>
+            </div>
+          );
+        })}
+      </Card>
     </div>
   );
 }
 
+/* ─── Status view ────────────────────────────────────────────── */
 function StatusView() {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -434,128 +646,155 @@ function StatusView() {
     setLoading(true);
     API("/api/status").then(d => { setStatus(d); setLoading(false); });
   }, []);
+  useEffect(() => { load(); const t = setInterval(load,30000); return ()=>clearInterval(t); }, [load]);
 
-  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
-
-  if (loading) return <div style={{padding:40,textAlign:"center",color:"#8a7a60"}}>Loading…</div>;
-
-  const fmtDate = d => d ? new Date(d).toLocaleString() : "—";
+  if (loading) return <Loader />;
+  const fmtDate = d => d ? new Date(d).toLocaleString() : "Never";
 
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-        <h2 style={{fontSize:26,color:"#12243d",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.03em"}}>System Status</h2>
-        <button onClick={load} style={{background:"#f4edd8",color:"#6a5a40",border:"1.5px solid #d4c4a0",padding:"7px 16px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"Oswald,sans-serif",fontWeight:700}}>↻ REFRESH</button>
-      </div>
+      <PageHeader title="System Status" sub="Scheduler and source health">
+        <Btn onClick={load} variant="ghost">↻ Refresh</Btn>
+      </PageHeader>
 
       {status?.demo && (
-        <div style={{background:"#dce8f8",border:"1.5px solid #1a4a8a",borderRadius:10,padding:"12px 18px",marginBottom:20}}>
-          <span style={{fontSize:12,color:"#1a4a8a",fontFamily:"Oswald,sans-serif",fontWeight:700}}>DEMO MODE — Fixture data only. No live marketplace data is being retrieved.</span>
+        <div style={{background:"var(--blue-bg)",border:"1px solid var(--blue-br)",borderRadius:10,
+          padding:"12px 18px",marginBottom:20,fontSize:13,color:"var(--blue)",fontWeight:500}}>
+          Demo mode — fixture data only. No live marketplace data is being retrieved.
         </div>
       )}
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:24}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:20}}>
         {[
-          ["SCHEDULER", status?.scheduler?.running ? "RUNNING" : "IDLE"],
-          ["LAST RUN", status?.scheduler?.lastRun?.at ? new Date(status.scheduler.lastRun.at).toLocaleTimeString() : "Never"],
-          ["NEXT RUN", status?.scheduler?.nextRun ? new Date(status.scheduler.nextRun).toLocaleTimeString() : "—"],
-          ["TOTAL LISTINGS", status?.stats?.totalListings ?? 0],
-          ["TOTAL MATCHES", status?.stats?.totalMatches ?? 0],
-        ].map(([label, val]) => (
-          <div key={label} style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:8,padding:"14px 16px"}}>
-            <div style={{fontSize:9,color:"#a89878",letterSpacing:"0.12em",marginBottom:6,fontFamily:"Oswald,sans-serif"}}>{label}</div>
-            <div style={{fontSize:18,fontWeight:700,color:"#12243d"}}>{String(val)}</div>
+          {label:"Scheduler",     value: status?.scheduler?.running ? "Running" : "Idle", hi: status?.scheduler?.running},
+          {label:"Last run",      value: status?.scheduler?.lastRun?.at ? new Date(status.scheduler.lastRun.at).toLocaleTimeString() : "Never"},
+          {label:"Next run",      value: status?.scheduler?.nextRun ? new Date(status.scheduler.nextRun).toLocaleTimeString() : "—"},
+          {label:"Total listings",value: status?.stats?.totalListings ?? 0},
+          {label:"Total matches", value: status?.stats?.totalMatches ?? 0},
+        ].map(({label,value,hi}) => (
+          <div key={label} style={{background:"var(--surface)",border:"1px solid var(--border)",
+            borderRadius:10,padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:7,fontWeight:500}}>{label}</div>
+            <div style={{fontSize:21,fontWeight:700,color:hi?"var(--green)":"var(--text)",
+              letterSpacing:"-0.02em",fontVariantNumeric:"tabular-nums"}}>{String(value)}</div>
           </div>
         ))}
       </div>
 
-      <div style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:12,overflow:"hidden",marginBottom:20}}>
-        <div style={{padding:"11px 18px",background:"#f4edd8",borderBottom:"1px solid #e8dcc8"}}>
-          <span style={{fontSize:10,color:"#8a7a60",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.1em"}}>DATA SOURCES</span>
-        </div>
-        {Object.entries(status?.sources || {}).map(([slug, src], i, arr) => (
-          <div key={slug} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"14px 18px",borderBottom:i<arr.length-1?"1px solid #e8dcc8":"none",background:i%2===0?"#fdfaf2":"#f8f2e4",gap:12,flexWrap:"wrap"}}>
+      <Card style={{marginBottom:16}}>
+        <CardHeader>Data sources</CardHeader>
+        {Object.entries(status?.sources||{}).map(([slug,src],i,arr) => (
+          <div key={slug} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+            padding:"14px 20px",borderTop:i>0?"1px solid var(--border)":"none",gap:12,flexWrap:"wrap"}}>
             <div>
-              <div style={{fontFamily:"Oswald,sans-serif",fontWeight:700,fontSize:14,color:"#12243d",marginBottom:4}}>{src.name}</div>
-              <div style={{fontSize:11,color:"#8a7a60"}}>Last checked: {fmtDate(src.lastCheck)}</div>
-              {src.error && <div style={{fontSize:11,color:"#c8102e",marginTop:2}}>{src.error.substring(0,120)}</div>}
+              <div style={{fontWeight:600,fontSize:14,color:"var(--text)",marginBottom:3}}>{src.name}</div>
+              <div style={{fontSize:12,color:"var(--muted)"}}>Last checked: {fmtDate(src.lastCheck)}</div>
+              {src.error && <div style={{fontSize:12,color:"var(--red)",marginTop:3}}>{src.error.substring(0,120)}</div>}
             </div>
             <StatusBadge status={src.status} />
           </div>
         ))}
-      </div>
+      </Card>
 
       {status?.lastScan && (
-        <div style={{background:"#fdfaf2",border:"1.5px solid #d8caa8",borderRadius:10,padding:"14px 18px"}}>
-          <div style={{fontSize:10,color:"#a89878",fontFamily:"Oswald,sans-serif",fontWeight:700,letterSpacing:"0.1em",marginBottom:8}}>LAST SCAN</div>
-          <div style={{fontSize:12,color:"#12243d"}}>
-            Status: <strong>{status.lastScan.status}</strong> ·
-            Results: <strong>{status.lastScan.result_count || 0}</strong> ·
-            Matches: <strong>{status.lastScan.match_count || 0}</strong> ·
+        <Card>
+          <CardHeader>Last scan</CardHeader>
+          <div style={{padding:"14px 20px",fontSize:13,color:"var(--text2)",lineHeight:2}}>
+            Status: <strong style={{color:"var(--text)"}}>{status.lastScan.status}</strong> ·{" "}
+            Results: <strong style={{color:"var(--text)"}}>{status.lastScan.result_count||0}</strong> ·{" "}
+            Matches: <strong style={{color:"var(--text)"}}>{status.lastScan.match_count||0}</strong> ·{" "}
             Started: {fmtDate(status.lastScan.started_at)}
-            {status.lastScan.error && <div style={{marginTop:4,color:"#c8102e"}}>{status.lastScan.error}</div>}
+            {status.lastScan.error && <div style={{marginTop:6,color:"var(--red)"}}>{status.lastScan.error}</div>}
           </div>
-        </div>
+        </Card>
       )}
     </div>
   );
 }
 
+/* ─── App shell ──────────────────────────────────────────────── */
 function App() {
-  const [tab, setTab] = useState("searches");
-  const [toast, setToast] = useState(null);
+  const [tab, setTab]           = useState("searches");
+  const [toast, setToast]       = useState(null);
+  const [schedulerOn, setSchedOn] = useState(false);
+
+  useEffect(() => {
+    API("/api/status").then(d => setSchedOn(d?.scheduler?.running)).catch(()=>{});
+  }, []);
 
   async function checkNow(searchId) {
-    setToast({ msg: "Checking…", color: "#1a4a8a" });
+    setToast({msg:"Scanning…", type:"info"});
     try {
-      const r = await fetch(`/api/searches/${searchId}/check`, { method:"POST" }).then(r => r.json());
-      if (r.ok) {
-        setToast({ msg: `Done — ${r.results} results, ${r.matches} matches`, color: "#1a6b38" });
-      } else {
-        setToast({ msg: r.error || "Check failed", color: "#c8102e" });
-      }
-    } catch (e) {
-      setToast({ msg: "Network error", color: "#c8102e" });
+      const r = await fetch(`/api/searches/${searchId}/check`,{method:"POST"}).then(r=>r.json());
+      if (r.ok) setToast({msg:`Done — ${r.results} results, ${r.matches} matches`, type:"success"});
+      else      setToast({msg:r.error||"Scan failed", type:"error"});
+    } catch {
+      setToast({msg:"Network error", type:"error"});
     }
-    setTimeout(() => setToast(null), 4000);
+    setTimeout(() => setToast(null), 4500);
   }
 
   const NAV = [
-    { id: "searches", label: "🔍 Searches" },
-    { id: "listings", label: "📋 Listings" },
-    { id: "history", label: "📜 History" },
-    { id: "status", label: "⚙ Status" },
+    {id:"searches", label:"Watchlist"},
+    {id:"listings", label:"Listings"},
+    {id:"history",  label:"History"},
+    {id:"status",   label:"Status"},
   ];
+
+  const toastBg = {info:"var(--accent)", success:"#15803d", error:"var(--red)"};
 
   return (
     <div>
-      {/* Header */}
-      <div className="ma-header" style={{background:"#12243d",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 24px",height:52}}>
-        <div style={{fontFamily:"Oswald,sans-serif",fontWeight:700,fontSize:20,color:"#f2ead8",letterSpacing:"0.04em"}}>
-          🔔 MARKETPLACE ALERTS
+      {/* ── Header ── */}
+      <div className="ma-header" style={{background:"var(--header)",position:"sticky",top:0,zIndex:100,
+        display:"flex",alignItems:"center",justifyContent:"space-between",
+        padding:"0 24px",height:56,boxShadow:"0 1px 0 rgba(255,255,255,0.05),0 2px 8px rgba(0,0,0,0.3)"}}>
+
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{
+            width:9,height:9,borderRadius:"50%",flexShrink:0,
+            background: schedulerOn ? "#4ade80" : "#475569",
+            animation: schedulerOn ? "pulse-dot 2.2s ease-in-out infinite" : "none",
+          }} />
+          <span style={{fontWeight:700,fontSize:14.5,color:"#f8fafc",letterSpacing:"-0.02em",userSelect:"none"}}>
+            Marketplace Alerts
+          </span>
         </div>
-        <div className="ma-nav" style={{display:"flex",gap:4}}>
+
+        <nav className="ma-nav" style={{display:"flex",gap:1}}>
           {NAV.map(n => (
-            <button key={n.id} onClick={() => setTab(n.id)} style={{background:tab===n.id?"rgba(255,255,255,0.1)":"transparent",color:tab===n.id?"#f2ead8":"#a89878",border:"none",padding:"6px 16px 4px",borderRadius:6,cursor:"pointer",fontFamily:"Oswald,sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.1em",borderBottom:tab===n.id?"2px solid #d4a870":"2px solid transparent"}}>
+            <button key={n.id} onClick={()=>setTab(n.id)} style={{
+              background: tab===n.id ? "rgba(99,102,241,0.25)" : "transparent",
+              color: tab===n.id ? "#a5b4fc" : "#64748b",
+              border:"none", padding:"6px 15px", borderRadius:7,
+              cursor:"pointer", fontSize:13, fontWeight: tab===n.id ? 600 : 500,
+              transition:"background 0.15s, color 0.15s",
+            }}>
               {n.label}
             </button>
           ))}
-        </div>
+        </nav>
       </div>
 
-      {/* Toast */}
+      {/* ── Toast ── */}
       {toast && (
-        <div style={{position:"fixed",top:60,right:20,background:toast.color,color:"#fff",padding:"10px 18px",borderRadius:8,fontWeight:700,fontSize:12,fontFamily:"Oswald,sans-serif",letterSpacing:"0.06em",zIndex:2000,boxShadow:"0 4px 12px rgba(0,0,0,0.2)"}}>
+        <div style={{
+          position:"fixed",top:68,right:20,
+          background:toastBg[toast.type]||"var(--accent)",color:"#fff",
+          padding:"10px 18px",borderRadius:10,fontWeight:600,fontSize:13,
+          zIndex:2000,boxShadow:"0 4px 20px rgba(0,0,0,0.25)",
+          animation:"slide-in 0.18s ease-out",
+        }}>
           {toast.msg}
         </div>
       )}
 
-      {/* Main */}
-      <div className="ma-main" style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
-        {tab === "searches" && <SearchesView onCheckNow={checkNow} />}
-        {tab === "listings" && <ListingsView />}
-        {tab === "history" && <HistoryView />}
-        {tab === "status" && <StatusView />}
+      {/* ── Main ── */}
+      <div className="ma-main" style={{maxWidth:960,margin:"0 auto",padding:"26px 20px"}}>
+        {tab==="searches" && <SearchesView onCheckNow={checkNow} />}
+        {tab==="listings" && <ListingsView />}
+        {tab==="history"  && <HistoryView />}
+        {tab==="status"   && <StatusView />}
       </div>
     </div>
   );
