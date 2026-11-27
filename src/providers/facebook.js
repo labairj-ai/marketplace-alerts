@@ -114,7 +114,7 @@ class FacebookMarketplaceProvider {
 
       // Keep scrolling to the last card until no new ones appear (up to ~8 rounds)
       let prevCount = 0;
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 20; i++) {
         const count = await page.$$eval('a[href*="/marketplace/item/"]', els => els.length);
         if (count === prevCount) break;
         prevCount = count;

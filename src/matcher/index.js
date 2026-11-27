@@ -34,8 +34,9 @@ function matchListing(listing, search) {
   const allKeywords = [...keywords, ...alts];
 
   if (allKeywords.length > 0) {
-    const lower = combined.toLowerCase();
-    const anyMatch = allKeywords.some(kw => lower.includes(kw.toLowerCase()));
+    // Normalize hyphens so "3-D printer" matches "3d printer"
+    const lower = combined.toLowerCase().replace(/-/g, "");
+    const anyMatch = allKeywords.some(kw => lower.includes(kw.toLowerCase().replace(/-/g, "")));
     if (!anyMatch) {
       return result("REJECTED", ["No configured search keywords matched"], listing, search);
     }
