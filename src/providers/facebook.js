@@ -145,7 +145,7 @@ class FacebookMarketplaceProvider {
       const url =
         `https://www.facebook.com/marketplace/113407735336754/search/` +
         `?query=${encodeURIComponent(keyword)}` +
-        `&latitude=${lat}&longitude=${lon}&radius=100&daysSinceListed=7`;
+        `&latitude=${lat}&longitude=${lon}&radius=100`;
 
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
       // Wait for JS-rendered listing cards
@@ -182,8 +182,8 @@ class FacebookMarketplaceProvider {
 
         if (!title) continue;
 
-        // Drop listings outside the saved search radius or ships-to-you nationwide
-        if (!cityInRadius(location, centerLat, centerLon, radiusMiles)) continue;
+        // Drop nationwide "Ships to you" listings — FB already geo-filtered the rest
+        if (location === "Ships to you") continue;
 
         listings.push({
           source:       "facebook_marketplace",
