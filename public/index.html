@@ -455,17 +455,16 @@ function SearchesView({ onCheckNow }) {
         <EmptyState icon="◎" title="Nothing on your watchlist" sub="Add a saved search to start monitoring marketplaces for deals." />
       ) : (
         <Card>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+            <table style={{width:"100%",minWidth:480,borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr>
-                  <th style={{...TH,width:"38%"}}>Title</th>
+                  <th style={{...TH,width:"40%"}}>Title</th>
                   <th style={{...TH,textAlign:"right"}}>Price</th>
                   <th style={{...TH}}>Match</th>
                   <th style={{...TH}}>Source</th>
                   <th style={{...TH}} className="hide-mobile">Location</th>
                   <th style={{...TH}} className="hide-mobile">Found</th>
-                  <th style={{...TH}}></th>
                 </tr>
               </thead>
               {searches.map((s, si) => {
@@ -477,7 +476,7 @@ function SearchesView({ onCheckNow }) {
                   <tbody key={s.id}>
                     {/* Section header row */}
                     <tr>
-                      <td colSpan={7} style={{
+                      <td colSpan={6} style={{
                         padding:"9px 14px",
                         borderTop: si > 0 ? "2px solid var(--border2)" : "none",
                         background:"var(--surface2)",
@@ -519,13 +518,13 @@ function SearchesView({ onCheckNow }) {
                         <td style={{...TD,maxWidth:0}}>
                           <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                             <a href={l.listing_url} target="_blank" rel="noreferrer"
-                              style={{fontWeight:600,color:"var(--text)",textDecoration:"none"}}>
+                              style={{fontWeight:600,color:"var(--accent)",textDecoration:"none"}}>
                               {l.title}
                             </a>
                           </div>
                         </td>
                         <td style={{...TD,textAlign:"right",fontWeight:700,fontSize:14,
-                          color:"var(--accent)",whiteSpace:"nowrap",
+                          color:"var(--text)",whiteSpace:"nowrap",
                           fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
                           {fmtPrice(l.price)}
                         </td>
@@ -541,21 +540,13 @@ function SearchesView({ onCheckNow }) {
                         <td className="hide-mobile" style={{...TD,color:"var(--muted)",whiteSpace:"nowrap",fontSize:12}}>
                           {fmtDate(l.first_matched)}
                         </td>
-                        <td style={{...TD,whiteSpace:"nowrap"}}>
-                          {l.listing_url && (
-                            <a href={l.listing_url} target="_blank" rel="noreferrer"
-                              style={{fontSize:12,color:"var(--accent)",textDecoration:"none",fontWeight:600}}>
-                              View →
-                            </a>
-                          )}
-                        </td>
                       </tr>
                     ))}
 
                     {/* Empty state row */}
                     {searchListings.length === 0 && (
                       <tr>
-                        <td colSpan={7} style={{...TD,color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>
+                        <td colSpan={6} style={{...TD,color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>
                           No matches yet
                         </td>
                       </tr>
