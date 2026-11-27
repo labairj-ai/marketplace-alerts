@@ -19,19 +19,33 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Approximate coords for common cities (used to filter out-of-radius FB results)
+// Approximate coords for cities within/near the search area.
+// If a city isn't listed here it will be rejected — safer than a broad state fallback.
 const CITY_COORDS = {
-  // OH
-  "cincinnati": [39.1031, -84.512], "dayton": [39.7589, -84.1916],
-  "columbus": [39.9612, -82.9988], "cleveland": [41.4993, -81.6944],
+  // Greater Cincinnati / SW Ohio
+  "cincinnati":  [39.1031, -84.5120], "hamilton":    [39.3995, -84.5613],
+  "middletown":  [39.5151, -84.3983], "mason":       [39.3598, -84.3099],
+  "west chester":[39.3612, -84.4113], "fairfield":   [39.3459, -84.5338],
+  "loveland":    [39.2687, -84.2638], "blue ash":    [39.2320, -84.3785],
+  "springdale":  [39.2887, -84.4857], "florence":    [38.9989, -84.6271],
+  // Northern KY
+  "covington":   [39.0837, -84.5085], "newport":     [39.0920, -84.4958],
+  "florence ky": [38.9989, -84.6271], "erlanger":    [39.0137, -84.5996],
+  "ft mitchell": [39.0623, -84.5538], "fort mitchell":[39.0623,-84.5538],
+  // Dayton area
+  "dayton":      [39.7589, -84.1916], "kettering":   [39.6884, -84.1688],
+  "springfield": [39.9242, -83.8088], "xenia":       [39.6845, -83.9274],
+  "miamisburg":  [39.6428, -84.2888], "huber heights":[39.8428,-84.1244],
   // KY
-  "lexington": [38.0406, -84.5037], "louisville": [38.2527, -85.7585],
-  // IN
-  "indianapolis": [39.7684, -86.1581], "richmond": [39.8284, -84.8902],
-  // nearby
-  "hamilton": [39.3995, -84.5613], "middletown": [39.5151, -84.3983],
-  "mason": [39.3598, -84.3099], "florence": [38.9989, -84.6271],
-  "covington": [39.0837, -84.5085], "berea": [37.5687, -84.2963],
+  "lexington":   [38.0406, -84.5037], "frankfort":   [38.2009, -84.8733],
+  "georgetown":  [38.2098, -84.5588], "richmond ky": [37.7479, -84.2947],
+  "louisville":  [38.2527, -85.7585],
+  // SE Indiana (within ~80 mi)
+  "richmond":    [39.8284, -84.8902], "connersville":[39.6417,-85.1413],
+  "batesville":  [39.3001, -85.2208],
+  // Columbus area (just inside 100 mi)
+  "columbus":    [39.9612, -82.9988], "chillicothe": [39.3331, -82.9821],
+  "lancaster":   [39.7137, -82.5996], "washington court house":[39.5370,-83.4388],
 };
 
 function cityInRadius(locationText, centerLat, centerLon, radiusMiles) {
@@ -43,12 +57,7 @@ function cityInRadius(locationText, centerLat, centerLon, radiusMiles) {
       return distKm <= radiusMiles * 1.60934;
     }
   }
-  // Unknown city — use state as rough filter
-  // Accept OH, KY, IN (tri-state); reject everything else
-  const stateM = locationText.match(/,\s*([A-Z]{2})$/);
-  if (stateM) {
-    return ["OH", "KY", "IN"].includes(stateM[1]);
-  }
+  // City not in lookup table — reject rather than guess
   return false;
 }
 
