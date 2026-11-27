@@ -364,17 +364,23 @@ function SearchModal({ initial, onSave, onClose }) {
   );
 }
 
-/* ─── Searches view ──────────────────────────────────────────── */
+/* ─── Searches + Listings combined view ─────────────────────── */
 function SearchesView({ onCheckNow }) {
   const [searches, setSearches] = useState([]);
+  const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [checking, setChecking] = useState({});
+  const [filterClass, setFilterClass] = useState("ALL");
+  const [sort, setSort] = useState("newest");
 
   const load = useCallback(() => {
     setLoading(true);
-    API("/api/searches").then(d => { setSearches(d); setLoading(false); });
-  }, []);
+    let listUrl = `/api/listings?sort=${sort}`;
+    if (filterClass !== "ALL") listUrl += `&classification=${filterClass}`;
+    Promise.all([API("/api/searches"), API(listUrl)])
+      .then(([s, l]) => { setSearches(s); setListings(l); setLoading(false); });
+  }, [filterClass, sort]);
   useEffect(() => { load(); }, [load]);
 
   async function saveSearch(payload) {
@@ -416,7 +422,16 @@ function SearchesView({ onCheckNow }) {
     };
   }
 
+  const listingsMap = listings.reduce((m, l) => {
+    if (!m[l.search_id]) m[l.search_id] = [];
+    m[l.search_id].push(l);
+    return m;
+  }, {});
+
   if (loading) return <Loader />;
+
+  const fmtPrice = p => p != null ? `$${Number(p).toLocaleString()}` : "—";
+  const fmtDate  = d => d ? new Date(d).toLocaleDateString() : "—";
 
   return (
     <div>
@@ -425,185 +440,150 @@ function SearchesView({ onCheckNow }) {
       )}
 
       <PageHeader title="Watchlist" sub={`${searches.length} saved search${searches.length!==1?"es":""}`}>
+        <SegmentedControl options={["ALL","CONFIRMED","POSSIBLE"]} value={filterClass} onChange={setFilterClass} />
+        <select value={sort} onChange={e=>setSort(e.target.value)} style={{
+          border:"1.5px solid var(--border2)",borderRadius:8,padding:"6px 10px",
+          fontSize:12.5,background:"var(--surface)",color:"var(--text)",cursor:"pointer"}}>
+          <option value="newest">Newest first</option>
+          <option value="price_asc">Price: low → high</option>
+          <option value="price_desc">Price: high → low</option>
+        </select>
         <Btn onClick={()=>setModal("new")} variant="primary">+ Add search</Btn>
       </PageHeader>
 
       {searches.length === 0 ? (
         <EmptyState icon="◎" title="Nothing on your watchlist" sub="Add a saved search to start monitoring marketplaces for deals." />
-      ) : searches.map(s => (
-        <div key={s.id} style={{
-          background:"var(--surface)", borderRadius:12, padding:"18px 20px", marginBottom:10,
-          boxShadow:"0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)",
-          border:"1px solid var(--border)",
-          borderLeft:`4px solid ${s.enabled?"var(--green)":"var(--border2)"}`,
-          transition:"box-shadow 0.15s",
-        }}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,flexWrap:"wrap"}}>
-                <span style={{fontWeight:700,fontSize:15,color:"var(--text)",letterSpacing:"-0.01em"}}>{s.name}</span>
-                <Pill bg={s.enabled?"var(--green-bg)":"var(--surface2)"}
-                  color={s.enabled?"var(--green)":"var(--muted)"}
-                  border={s.enabled?"var(--green-br)":"var(--border2)"}>
-                  {s.enabled?"● Active":"○ Paused"}
-                </Pill>
-                {(s.match_count||0) > 0 && (
-                  <Pill bg="var(--blue-bg)" color="var(--blue)" border="var(--blue-br)">
-                    {s.match_count} match{s.match_count!==1?"es":""}
+      ) : searches.map(s => {
+        const searchListings = listingsMap[s.id] || [];
+        const confirmed = searchListings.filter(l => l.classification === "CONFIRMED");
+        const possible  = searchListings.filter(l => l.classification === "POSSIBLE");
+
+        return (
+          <div key={s.id} style={{
+            background:"var(--surface)", borderRadius:12, marginBottom:14,
+            boxShadow:"0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)",
+            border:"1px solid var(--border)",
+            borderLeft:`4px solid ${s.enabled?"var(--green)":"var(--border2)"}`,
+          }}>
+            {/* Search header */}
+            <div style={{padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:700,fontSize:15,color:"var(--text)",letterSpacing:"-0.01em"}}>{s.name}</span>
+                  <Pill bg={s.enabled?"var(--green-bg)":"var(--surface2)"}
+                    color={s.enabled?"var(--green)":"var(--muted)"}
+                    border={s.enabled?"var(--green-br)":"var(--border2)"}>
+                    {s.enabled?"● Active":"○ Paused"}
                   </Pill>
-                )}
-              </div>
-
-              <div style={{fontSize:12,color:"var(--text2)",display:"flex",flexWrap:"wrap",gap:"2px 16px",marginBottom:10}}>
-                <span>{s.center_label} · {s.radius_miles} mi</span>
-                {s.price_max != null && <span>Under ${s.price_max.toLocaleString()}</span>}
-                {s.price_min != null && <span>Min ${s.price_min.toLocaleString()}</span>}
-                {s.last_checked && <span style={{color:"var(--muted)"}}>Last scan {new Date(s.last_checked).toLocaleString()}</span>}
-              </div>
-
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {(s.keywords||[]).map(k => (
-                  <span key={k} style={{background:"var(--surface2)",border:"1px solid var(--border)",
-                    borderRadius:6,padding:"2px 8px",fontSize:11.5,color:"var(--text2)"}}>{k}</span>
-                ))}
-              </div>
-            </div>
-
-            <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
-              <Btn onClick={()=>handleCheck(s.id)} variant="success" disabled={checking[s.id]}>
-                {checking[s.id]?"Scanning…":"Scan now"}
-              </Btn>
-              <Btn onClick={()=>toggleSearch(s)} variant="ghost">{s.enabled?"Pause":"Resume"}</Btn>
-              <Btn onClick={()=>setModal(s)} variant="ghost">Edit</Btn>
-              <Btn onClick={()=>deleteSearch(s.id)} variant="danger" title="Delete">✕</Btn>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ─── Listings view ──────────────────────────────────────────── */
-function ListingsView() {
-  const [listings, setListings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filterClass, setFilterClass] = useState("ALL");
-  const [sort, setSort] = useState("newest");
-
-  useEffect(() => {
-    setLoading(true);
-    let url = `/api/listings?sort=${sort}`;
-    if (filterClass !== "ALL") url += `&classification=${filterClass}`;
-    API(url).then(d => { setListings(d); setLoading(false); });
-  }, [filterClass, sort]);
-
-  const fmtPrice = p => p != null ? `$${Number(p).toLocaleString()}` : "—";
-  const fmtDate  = d => d ? new Date(d).toLocaleDateString() : "—";
-
-  return (
-    <div>
-      <PageHeader title="Listings" sub={`${listings.length} match${listings.length!==1?"es":""}`}>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <SegmentedControl options={["ALL","CONFIRMED","POSSIBLE"]} value={filterClass} onChange={setFilterClass} />
-          <select value={sort} onChange={e=>setSort(e.target.value)} style={{
-            border:"1.5px solid var(--border2)",borderRadius:8,padding:"6px 10px",
-            fontSize:12.5,background:"var(--surface)",color:"var(--text)",cursor:"pointer"}}>
-            <option value="newest">Newest first</option>
-            <option value="price_asc">Price: low → high</option>
-            <option value="price_desc">Price: high → low</option>
-          </select>
-        </div>
-      </PageHeader>
-
-      {loading ? <Loader /> : listings.length === 0 ? (
-        <EmptyState icon="◎" title="No matches yet" sub="Run a scan to discover matching listings." />
-      ) : (
-        <>
-          {["CONFIRMED","POSSIBLE"].map(cls => {
-            const group = listings.filter(l =>
-              filterClass==="ALL" ? l.classification===cls : l.classification===filterClass && l.classification===cls
-            );
-            if (filterClass!=="ALL" && filterClass!==cls) return null;
-            if (!group.length) return null;
-            return (
-              <Card key={cls} style={{marginBottom:24}}>
-                <CardHeader>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <ClassBadge cls={cls} />
-                    <span>{group.length} listing{group.length!==1?"s":""}</span>
-                  </div>
-                </CardHeader>
-                <div style={{overflowX:"auto"}}>
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                    <thead>
-                      <tr style={{background:"var(--surface2)"}}>
-                        <th style={{...TH, width:"38%"}}>Title</th>
-                        <th style={{...TH, textAlign:"right"}}>Price</th>
-                        <th style={{...TH}}>Source</th>
-                        <th style={{...TH}} className="hide-mobile">Location</th>
-                        <th style={{...TH}} className="hide-mobile">Listed</th>
-                        <th style={{...TH}} className="hide-mobile">Found</th>
-                        <th style={{...TH}}></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.map((l, ri) => (
-                        <tr key={`${l.id}-${l.search_id}`}
-                          style={{borderTop:"1px solid var(--border)",
-                            background: ri%2===0 ? "var(--surface)" : "var(--surface2)"}}>
-                          <td style={{...TD, maxWidth:0}}>
-                            <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                              <a href={l.listing_url} target="_blank" rel="noreferrer"
-                                style={{fontWeight:600,color:"var(--text)",textDecoration:"none"}}>
-                                {l.title}
-                              </a>
-                            </div>
-                            {(l.reasons||[]).length > 0 && (
-                              <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4}}>
-                                {l.reasons.map((r,i) => (
-                                  <span key={i} style={{background:"var(--surface2)",
-                                    border:"1px solid var(--border)",borderRadius:4,
-                                    padding:"1px 6px",fontSize:10.5,color:"var(--muted)"}}>{r}</span>
-                                ))}
-                              </div>
-                            )}
-                          </td>
-                          <td style={{...TD, textAlign:"right", fontWeight:700, fontSize:15,
-                            color:"var(--accent)", whiteSpace:"nowrap",
-                            fontVariantNumeric:"tabular-nums", letterSpacing:"-0.02em"}}>
-                            {fmtPrice(l.price)}
-                          </td>
-                          <td style={{...TD, whiteSpace:"nowrap"}}>
-                            <SourceChip name={l.source_name} />
-                          </td>
-                          <td className="hide-mobile" style={{...TD, color:"var(--text2)", whiteSpace:"nowrap"}}>
-                            {l.location_text||"—"}
-                          </td>
-                          <td className="hide-mobile" style={{...TD, color:"var(--muted)", whiteSpace:"nowrap"}}>
-                            {l.listed_at ? new Date(l.listed_at).toLocaleDateString() : "—"}
-                          </td>
-                          <td className="hide-mobile" style={{...TD, color:"var(--muted)", whiteSpace:"nowrap"}}>
-                            {fmtDate(l.first_matched)}
-                          </td>
-                          <td style={{...TD, whiteSpace:"nowrap"}}>
-                            {l.listing_url && (
-                              <a href={l.listing_url} target="_blank" rel="noreferrer"
-                                style={{fontSize:12,color:"var(--accent)",textDecoration:"none",fontWeight:600}}>
-                                View →
-                              </a>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {confirmed.length > 0 && (
+                    <Pill {...CONFIRMED_C}>{confirmed.length} confirmed</Pill>
+                  )}
+                  {possible.length > 0 && (
+                    <Pill {...POSSIBLE_C}>{possible.length} possible</Pill>
+                  )}
                 </div>
-              </Card>
-            );
-          })}
-        </>
-      )}
+
+                <div style={{fontSize:12,color:"var(--text2)",display:"flex",flexWrap:"wrap",gap:"2px 16px",marginBottom:10}}>
+                  <span>{s.center_label} · {s.radius_miles} mi</span>
+                  {s.price_max != null && <span>Under ${s.price_max.toLocaleString()}</span>}
+                  {s.price_min != null && <span>Min ${s.price_min.toLocaleString()}</span>}
+                  {s.last_checked && <span style={{color:"var(--muted)"}}>Last scan {new Date(s.last_checked).toLocaleString()}</span>}
+                </div>
+
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {(s.keywords||[]).map(k => (
+                    <span key={k} style={{background:"var(--surface2)",border:"1px solid var(--border)",
+                      borderRadius:6,padding:"2px 8px",fontSize:11.5,color:"var(--text2)"}}>{k}</span>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
+                <Btn onClick={()=>handleCheck(s.id)} variant="success" disabled={checking[s.id]}>
+                  {checking[s.id]?"Scanning…":"Scan now"}
+                </Btn>
+                <Btn onClick={()=>toggleSearch(s)} variant="ghost">{s.enabled?"Pause":"Resume"}</Btn>
+                <Btn onClick={()=>setModal(s)} variant="ghost">Edit</Btn>
+                <Btn onClick={()=>deleteSearch(s.id)} variant="danger" title="Delete">✕</Btn>
+              </div>
+            </div>
+
+            {/* Listings inline */}
+            {searchListings.length > 0 ? (
+              <div style={{borderTop:"1px solid var(--border)",overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                  <thead>
+                    <tr style={{background:"var(--surface2)"}}>
+                      <th style={{...TH,width:"40%"}}>Title</th>
+                      <th style={{...TH,textAlign:"right"}}>Price</th>
+                      <th style={{...TH}}>Match</th>
+                      <th style={{...TH}}>Source</th>
+                      <th style={{...TH}} className="hide-mobile">Location</th>
+                      <th style={{...TH}} className="hide-mobile">Found</th>
+                      <th style={{...TH}}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...confirmed, ...possible].map((l, ri) => (
+                      <tr key={`${l.id}-${l.search_id}`}
+                        style={{borderTop:"1px solid var(--border)",
+                          background: ri%2===0 ? "var(--surface)" : "var(--surface2)"}}>
+                        <td style={{...TD,maxWidth:0}}>
+                          <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            <a href={l.listing_url} target="_blank" rel="noreferrer"
+                              style={{fontWeight:600,color:"var(--text)",textDecoration:"none"}}>
+                              {l.title}
+                            </a>
+                          </div>
+                          {(l.reasons||[]).length > 0 && (
+                            <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4}}>
+                              {l.reasons.map((r,i) => (
+                                <span key={i} style={{background:"var(--surface2)",
+                                  border:"1px solid var(--border)",borderRadius:4,
+                                  padding:"1px 6px",fontSize:10.5,color:"var(--muted)"}}>{r}</span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{...TD,textAlign:"right",fontWeight:700,fontSize:15,
+                          color:"var(--accent)",whiteSpace:"nowrap",
+                          fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
+                          {fmtPrice(l.price)}
+                        </td>
+                        <td style={{...TD,whiteSpace:"nowrap"}}>
+                          <ClassBadge cls={l.classification} />
+                        </td>
+                        <td style={{...TD,whiteSpace:"nowrap"}}>
+                          <SourceChip name={l.source_name} />
+                        </td>
+                        <td className="hide-mobile" style={{...TD,color:"var(--text2)",whiteSpace:"nowrap"}}>
+                          {l.location_text||"—"}
+                        </td>
+                        <td className="hide-mobile" style={{...TD,color:"var(--muted)",whiteSpace:"nowrap"}}>
+                          {fmtDate(l.first_matched)}
+                        </td>
+                        <td style={{...TD,whiteSpace:"nowrap"}}>
+                          {l.listing_url && (
+                            <a href={l.listing_url} target="_blank" rel="noreferrer"
+                              style={{fontSize:12,color:"var(--accent)",textDecoration:"none",fontWeight:600}}>
+                              View →
+                            </a>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{borderTop:"1px solid var(--border)",padding:"10px 20px",
+                fontSize:12,color:"var(--muted)",fontStyle:"italic"}}>
+                No matches yet
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -784,7 +764,6 @@ function App() {
 
   const NAV = [
     {id:"searches", label:"Watchlist"},
-    {id:"listings", label:"Listings"},
     {id:"history",  label:"History"},
     {id:"status",   label:"Status"},
   ];
@@ -840,7 +819,6 @@ function App() {
       {/* ── Main ── */}
       <div className="ma-main" style={{maxWidth:960,margin:"0 auto",padding:"26px 20px"}}>
         {tab==="searches" && <SearchesView onCheckNow={checkNow} />}
-        {tab==="listings" && <ListingsView />}
         {tab==="history"  && <HistoryView />}
         {tab==="status"   && <StatusView />}
       </div>
