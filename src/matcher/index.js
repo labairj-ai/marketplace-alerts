@@ -33,21 +33,15 @@ function matchListing(listing, search) {
   const alts = parseJson(search.keyword_alts, []);
 
   if (keywords.length > 0) {
-    // Check primary keywords against TITLE ONLY — not combined (which includes the
-    // CL description field that just stores the search query term). Without this,
-    // any listing retrieved via a broad alt query ("kids", "indoor") trivially
-    // self-matches because the query string ends up in listing.description.
+    // Match against TITLE ONLY — description stores the CL search query term and
+    // cannot be used for qualification (any listing fetched by query "X" has "X"
+    // in description, so combined always self-matches).
     const titleLower = listing.title.toLowerCase().replace(/-/g, "");
-    const primaryMatch = keywords.some(kw => titleLower.includes(kw.toLowerCase().replace(/-/g, "")));
+    const primaryInTitle = keywords.some(kw => titleLower.includes(kw.toLowerCase().replace(/-/g, "")));
+    const altInTitle     = alts.some(kw => titleLower.includes(kw.toLowerCase().replace(/-/g, "")));
 
-    if (!primaryMatch) {
-      // Alts are specific product names (e.g. "QIDI Q1 Pro") that can stand alone —
-      // check them against combined (title + description) as a fallback.
-      const combinedLower = combined.toLowerCase().replace(/-/g, "");
-      const altMatch = alts.some(kw => combinedLower.includes(kw.toLowerCase().replace(/-/g, "")));
-      if (!altMatch) {
-        return result("REJECTED", ["No primary or alternate keywords matched listing title"], listing, search);
-      }
+    if (!primaryInTitle && !altInTitle) {
+      return result("REJECTED", ["No primary or alternate keywords matched listing title"], listing, search);
     }
   }
 
