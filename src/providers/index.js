@@ -1,14 +1,14 @@
 "use strict";
 const { FixtureProvider } = require("./fixture");
 const { FacebookMarketplaceProvider } = require("./facebook");
-const { CraigslistRssProvider } = require("./craigslist");
+const { CraigslistProvider } = require("./craigslist");
 
 const _providers = {};
 
 function getProviders() {
   if (!_providers.facebook_marketplace) {
     _providers.facebook_marketplace = new FacebookMarketplaceProvider();
-    _providers.craigslist = new CraigslistRssProvider();
+    _providers.craigslist = new CraigslistProvider();
     _providers.fixture = new FixtureProvider();
   }
   return _providers;

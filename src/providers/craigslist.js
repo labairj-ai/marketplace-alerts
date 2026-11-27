@@ -1,119 +1,26 @@
 "use strict";
 
 /**
- * Craigslist Provider — RSS Feed Polling
+ * Craigslist Provider — JSON Search API
  *
- * Craigslist publishes official public RSS feeds for every search:
- *   https://{market}.craigslist.org/search/{section}?format=rss&query={term}&sort=date
+ * Uses Craigslist's undocumented-but-stable JSON search endpoint:
+ *   https://{market}.craigslist.org/jsonsearch/{section}/?query={term}
  *
- * No authentication, no scraping, no IMAP. We fetch the RSS on each
- * scheduler cycle and extract current listings across regional markets.
+ * Returns structured data (title, price, lat/lon, timestamp, URL) without
+ * needing Playwright or authentication. The endpoint is accessible from
+ * server IPs unlike the RSS feed.
  *
- * Markets within ~75 miles of Cincinnati (39.10, -84.51):
+ * Markets scanned (within ~100 mi of Cincinnati):
  *   cincinnati  ~0 mi
  *   dayton      ~55 mi
- *   lexington   ~80 mi  (included; geo filter rejects far listings)
- *   columbus    ~105 mi (included; geo filter rejects far listings)
+ *   lexington   ~80 mi
+ *   columbus    ~105 mi
  */
 
-// Markets to scan. Geo filter in matcher will reject anything outside radius.
 const MARKETS = ["cincinnati", "dayton", "lexington", "columbus"];
+const SECTION = "sss"; // for-sale (all)
 
-// Craigslist for-sale section
-const SECTION = "sss";
-
-// Approximate city centers for geo estimation when lat/lon not in RSS
-const CITY_COORDS = {
-  cincinnati:  { lat: 39.1031, lon: -84.5120 },
-  dayton:      { lat: 39.7589, lon: -84.1916 },
-  lexington:   { lat: 38.0406, lon: -84.5037 },
-  columbus:    { lat: 39.9612, lon: -82.9988 },
-};
-
-function getTag(xml, tag) {
-  const m = xml.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>`, "i"))
-    || xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
-  return m ? m[1].trim() : null;
-}
-
-function getLinkFromItem(item) {
-  // <link> in RSS 2.0 appears as text after the tag, not as an XML child
-  // Craigslist puts the URL as plain text between <link> tags
-  const m = item.match(/<link>(https?:\/\/[^\s<]+)<\/link>/i)
-    || item.match(/<link\s[^>]*href="([^"]+)"/i)
-    || item.match(/(https?:\/\/[\w.-]+\.craigslist\.org\/[\w/.-]+\/\d+\.html)/i);
-  return m ? m[1].trim() : null;
-}
-
-function extractPrice(text) {
-  if (!text) return null;
-  const clean = text.replace(/<[^>]+>/g, " ");
-  const m = clean.match(/\$\s*([\d,]+)/);
-  if (!m) return null;
-  const n = parseFloat(m[1].replace(/,/g, ""));
-  return n > 0 && n < 1000000 ? n : null;
-}
-
-function extractLocation(text) {
-  if (!text) return null;
-  const clean = text.replace(/<[^>]+>/g, " ");
-  const m = clean.match(/([A-Z][a-zA-Z\s]+),\s*([A-Z]{2})\b/);
-  return m ? `${m[1].trim()}, ${m[2]}` : null;
-}
-
-function stripHtml(html) {
-  if (!html) return null;
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().substring(0, 500) || null;
-}
-
-function parseRssItems(xml, market) {
-  const items = [];
-  const seen = new Set();
-  const itemPattern = /<item>([\s\S]*?)<\/item>/gi;
-  let m;
-
-  while ((m = itemPattern.exec(xml)) !== null) {
-    const raw = m[1];
-    const link = getLinkFromItem(raw);
-    if (!link) continue;
-
-    const idMatch = link.match(/\/(\d+)\.html/);
-    if (!idMatch) continue;
-    const externalId = idMatch[1];
-    if (seen.has(externalId)) continue;
-    seen.add(externalId);
-
-    const title   = getTag(raw, "title")        || "";
-    const desc    = getTag(raw, "description")  || "";
-    const pubDate = getTag(raw, "pubDate") || getTag(raw, "dc:date");
-    const imgUrl  = raw.match(/enclosure[^>]+url="([^"]+)"/i)?.[1] || null;
-
-    const price    = extractPrice(title) ?? extractPrice(desc);
-    const location = extractLocation(desc) || `${market.charAt(0).toUpperCase() + market.slice(1)}, OH`;
-    const coords   = CITY_COORDS[market] || null;
-
-    items.push({
-      source:      "craigslist",
-      listingId:   externalId,
-      title:       title.replace(/\s+/g, " ").trim(),
-      description: stripHtml(desc),
-      price,
-      currency:    "USD",
-      locationText: location,
-      latitude:    coords?.lat ?? null,
-      longitude:   coords?.lon ?? null,
-      imageUrl:    imgUrl,
-      listingUrl:  link,
-      listedAt:    pubDate ? new Date(pubDate).toISOString() : null,
-      discoveredAt: new Date().toISOString(),
-      raw:         { rss: true, market },
-    });
-  }
-
-  return items;
-}
-
-class CraigslistRssProvider {
+class CraigslistProvider {
   constructor() {
     this.slug = "craigslist";
     this.name = "Craigslist";
@@ -123,8 +30,11 @@ class CraigslistRssProvider {
 
   async validateAccess() {
     try {
-      const url = `https://cincinnati.craigslist.org/search/${SECTION}?format=rss&query=test&sort=date`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const url = `https://cincinnati.craigslist.org/jsonsearch/${SECTION}/?query=test`;
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
+        headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" },
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return { ok: true, status: "LIVE" };
     } catch (err) {
@@ -132,32 +42,51 @@ class CraigslistRssProvider {
     }
   }
 
-  /**
-   * Search for listings via Craigslist RSS across regional markets.
-   * Uses first keyword only (most specific) to avoid flooding markets with requests.
-   */
   async search({ keywords = [] } = {}) {
     if (!keywords.length) return [];
 
-    // Use the most specific keyword (usually the shortest distinct phrase)
+    // Use first keyword (most specific)
     const query = keywords[0];
-    const listings = [];
     const seen = new Set();
+    const listings = [];
 
     for (const market of MARKETS) {
       try {
-        const url = `https://${market}.craigslist.org/search/${SECTION}?format=rss&query=${encodeURIComponent(query)}&sort=date`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        const url = `https://${market}.craigslist.org/jsonsearch/${SECTION}/?query=${encodeURIComponent(query)}&sort=date`;
+        const res = await fetch(url, {
+          signal: AbortSignal.timeout(10000),
+          headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" },
+        });
         if (!res.ok) continue;
-        const xml = await res.text();
-        const items = parseRssItems(xml, market);
+
+        const data = await res.json();
+        // Response is [[...listings], metadata] or just [...listings]
+        const items = Array.isArray(data[0]) ? data[0] : (Array.isArray(data) ? data : []);
+
         for (const item of items) {
-          if (seen.has(item.listingId)) { continue; }
-          seen.add(item.listingId);
-          listings.push(item);
+          const id = String(item.PostingID || "");
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+
+          listings.push({
+            source:       "craigslist",
+            listingId:    id,
+            title:        (item.PostingTitle || "").trim(),
+            description:  null,
+            price:        item.price != null ? Number(item.price) : null,
+            currency:     "USD",
+            locationText: null,
+            latitude:     item.Latitude  != null ? Number(item.Latitude)  : null,
+            longitude:    item.Longitude != null ? Number(item.Longitude) : null,
+            imageUrl:     item.ImageThumb || null,
+            listingUrl:   item.PostingURL || null,
+            listedAt:     item.PostedDate ? new Date(item.PostedDate * 1000).toISOString() : null,
+            discoveredAt: new Date().toISOString(),
+            raw:          { market, cl: true },
+          });
         }
       } catch {
-        // Skip markets that time out or error — don't fail the whole scan
+        // Skip markets that fail — don't block the whole scan
       }
     }
 
@@ -172,11 +101,8 @@ class CraigslistRssProvider {
     if (this._lastError) {
       return { status: "ERROR", lastCheck: this._lastCheck, error: this._lastError };
     }
-    if (this._lastCheck) {
-      return { status: "LIVE", lastCheck: this._lastCheck, error: null };
-    }
-    return { status: "LIVE", lastCheck: null, error: null };
+    return { status: "LIVE", lastCheck: this._lastCheck, error: null };
   }
 }
 
-module.exports = { CraigslistRssProvider };
+module.exports = { CraigslistProvider };

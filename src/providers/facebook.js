@@ -8,6 +8,50 @@ const SESSION_FILE =
   process.env.FB_SESSION_FILE ||
   path.join(__dirname, "../../fb_session.json");
 
+// --- geo helpers ---
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Approximate coords for common cities (used to filter out-of-radius FB results)
+const CITY_COORDS = {
+  // OH
+  "cincinnati": [39.1031, -84.512], "dayton": [39.7589, -84.1916],
+  "columbus": [39.9612, -82.9988], "cleveland": [41.4993, -81.6944],
+  // KY
+  "lexington": [38.0406, -84.5037], "louisville": [38.2527, -85.7585],
+  // IN
+  "indianapolis": [39.7684, -86.1581], "richmond": [39.8284, -84.8902],
+  // nearby
+  "hamilton": [39.3995, -84.5613], "middletown": [39.5151, -84.3983],
+  "mason": [39.3598, -84.3099], "florence": [38.9989, -84.6271],
+  "covington": [39.0837, -84.5085], "berea": [37.5687, -84.2963],
+};
+
+function cityInRadius(locationText, centerLat, centerLon, radiusMiles) {
+  if (!locationText || locationText === "Ships to you") return false;
+  const lower = locationText.toLowerCase();
+  for (const [city, [lat, lon]] of Object.entries(CITY_COORDS)) {
+    if (lower.includes(city)) {
+      const distKm = haversineKm(centerLat, centerLon, lat, lon);
+      return distKm <= radiusMiles * 1.60934;
+    }
+  }
+  // Unknown city — use state as rough filter
+  // Accept OH, KY, IN (tri-state); reject everything else
+  const stateM = locationText.match(/,\s*([A-Z]{2})$/);
+  if (stateM) {
+    return ["OH", "KY", "IN"].includes(stateM[1]);
+  }
+  return false;
+}
+
 // --- listing data extraction ---
 
 function extractPrice(spans) {
@@ -62,7 +106,7 @@ class FacebookMarketplaceProvider {
     return { ok: true, status: "LIVE" };
   }
 
-  async search({ keywords = [] } = {}) {
+  async search({ keywords = [], search } = {}) {
     if (!this._hasSession()) {
       throw new Error("AUTHORIZATION_REQUIRED: No Facebook session file. Run: node scripts/fb-auth-setup.js");
     }
@@ -111,6 +155,11 @@ class FacebookMarketplaceProvider {
           }).filter(x => x.id)
       );
 
+      // Radius from saved search (default 100 mi)
+      const centerLat   = search?.center_lat   ?? lat;
+      const centerLon   = search?.center_lon   ?? lon;
+      const radiusMiles = search?.radius_miles ?? 100;
+
       const seen = new Set();
       const listings = [];
 
@@ -123,6 +172,9 @@ class FacebookMarketplaceProvider {
         const location = extractLocation(item.imgAlt);
 
         if (!title) continue;
+
+        // Drop listings outside the saved search radius or ships-to-you nationwide
+        if (!cityInRadius(location, centerLat, centerLon, radiusMiles)) continue;
 
         listings.push({
           source:       "facebook_marketplace",
