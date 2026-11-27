@@ -6,8 +6,8 @@ const { CraigslistRssProvider } = require("./craigslist");
 const _providers = {};
 
 function getProviders() {
-  if (!_providers.facebook) {
-    _providers.facebook = new FacebookMarketplaceProvider();
+  if (!_providers.facebook_marketplace) {
+    _providers.facebook_marketplace = new FacebookMarketplaceProvider();
     _providers.craigslist = new CraigslistRssProvider();
     _providers.fixture = new FixtureProvider();
   }
