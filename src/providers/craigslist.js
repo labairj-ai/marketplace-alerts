@@ -68,16 +68,13 @@ class CraigslistProvider {
           if (!id || seen.has(id)) continue;
           seen.add(id);
 
-          // Drop listings whose title doesn't contain any of the keywords
-          const titleLower = (item.PostingTitle || "").toLowerCase();
-          const anyKeyword = keywords.some(k => titleLower.includes(k.toLowerCase()));
-          if (!anyKeyword) continue;
-
           listings.push({
             source:       "craigslist",
             listingId:    id,
             title:        (item.PostingTitle || "").trim(),
-            description:  null,
+            // Store the query term so the matcher can confirm keyword presence
+            // even when the brand/model isn't literally in the title (CL matches body too)
+            description:  query,
             price:        item.price != null ? Number(item.price) : null,
             currency:     "USD",
             locationText: null,
