@@ -11,7 +11,16 @@ const app = express();
 const PORT = process.env.PORT || 3457;
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+// Cache static assets (JS/CSS/images) but never cache HTML
+app.use(express.static(path.join(__dirname, "public"), {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
+  },
+}));
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 
@@ -281,6 +290,9 @@ app.get("/api/sources", (req, res) => {
 // ─── SPA fallback ─────────────────────────────────────────────────────────────
 
 app.get("*", (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
