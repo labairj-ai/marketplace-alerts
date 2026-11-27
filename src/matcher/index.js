@@ -31,14 +31,23 @@ function matchListing(listing, search) {
   // ── 1. Keyword matching (generic searches only) ───────────────────────────
   const keywords = parseJson(search.keywords, []);
   const alts = parseJson(search.keyword_alts, []);
-  const allKeywords = [...keywords, ...alts];
 
-  if (allKeywords.length > 0) {
-    // Normalize hyphens so "3-D printer" matches "3d printer"
-    const lower = combined.toLowerCase().replace(/-/g, "");
-    const anyMatch = allKeywords.some(kw => lower.includes(kw.toLowerCase().replace(/-/g, "")));
-    if (!anyMatch) {
-      return result("REJECTED", ["No configured search keywords matched"], listing, search);
+  if (keywords.length > 0) {
+    // Check primary keywords against TITLE ONLY — not combined (which includes the
+    // CL description field that just stores the search query term). Without this,
+    // any listing retrieved via a broad alt query ("kids", "indoor") trivially
+    // self-matches because the query string ends up in listing.description.
+    const titleLower = listing.title.toLowerCase().replace(/-/g, "");
+    const primaryMatch = keywords.some(kw => titleLower.includes(kw.toLowerCase().replace(/-/g, "")));
+
+    if (!primaryMatch) {
+      // Alts are specific product names (e.g. "QIDI Q1 Pro") that can stand alone —
+      // check them against combined (title + description) as a fallback.
+      const combinedLower = combined.toLowerCase().replace(/-/g, "");
+      const altMatch = alts.some(kw => combinedLower.includes(kw.toLowerCase().replace(/-/g, "")));
+      if (!altMatch) {
+        return result("REJECTED", ["No primary or alternate keywords matched listing title"], listing, search);
+      }
     }
   }
 

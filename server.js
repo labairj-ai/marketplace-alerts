@@ -184,16 +184,21 @@ app.post("/api/searches/:id/check", async (req, res) => {
     const sourceRows = db.prepare("SELECT id, slug FROM sources").all();
     const sourceMap = Object.fromEntries(sourceRows.map(r => [r.slug, r.id]));
 
+    const seenListingIds = new Set();
     const matches = [];
     for (const item of results) {
       const sourceId = sourceMap[item._sourceSlug || "fixture"];
       if (!sourceId) continue;
       const listingId = upsertListing(db, sourceId, item);
+      seenListingIds.add(listingId);
       const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(listingId);
       const matchResult = matchListing(listing, search);
       if (matchResult.classification !== "REJECTED") {
         upsertMatch(db, search.id, listingId, matchResult.classification, matchResult.reasons);
         matches.push({ ...matchResult, listing });
+      } else {
+        // If this listing was previously matched, remove the stale match record
+        db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listingId);
       }
     }
 

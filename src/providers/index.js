@@ -56,9 +56,11 @@ async function runSearch(savedSearch, { enabledSourceSlugs, demo = false } = {})
 
       const keywords = JSON.parse(savedSearch.keywords || "[]");
       const alts = JSON.parse(savedSearch.keyword_alts || "[]");
-      const allKeywords = [...keywords, ...alts];
 
-      const raw = await provider.search({ keywords: allKeywords, search: savedSearch });
+      // Only send primary keywords as search queries — alts are too broad to search
+      // independently (e.g. "kids", "indoor") and cause massive false-positive volumes.
+      // Alts are evaluated at match-time against listing titles.
+      const raw = await provider.search({ keywords, alts, search: savedSearch });
 
       sourceStatuses[slug] = { status: "LIVE", count: raw.length };
       results.push(...raw.map(r => ({ ...r, _sourceSlug: slug })));
