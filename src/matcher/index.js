@@ -38,7 +38,12 @@ function matchListing(listing, search) {
     // in description, so combined always self-matches).
     const titleLower = listing.title.toLowerCase().replace(/-/g, "");
     const primaryInTitle = keywords.some(kw => titleMatchesKeyword(kw, titleLower));
-    const altInTitle     = alts.some(kw => titleMatchesKeyword(kw, titleLower));
+
+    // Single-word alts (e.g. "kids", "indoor") are too generic to serve as
+    // standalone title matches — they'd pass "Kids Snow Pants" for a trampoline
+    // search. Only 2+ word alts count as independent alternatives.
+    const meaningfulAlts = alts.filter(kw => kw.trim().split(/\s+/).length >= 2);
+    const altInTitle     = meaningfulAlts.some(kw => titleMatchesKeyword(kw, titleLower));
 
     if (!primaryInTitle && !altInTitle) {
       return result("REJECTED", ["No primary or alternate keywords matched listing title"], listing, search);
