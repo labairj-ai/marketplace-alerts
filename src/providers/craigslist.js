@@ -52,14 +52,27 @@ class CraigslistProvider {
     const radiusMiles = search?.radius_miles ?? 75;
     if (!keywords.length) return [];
 
-    // For 3+ word phrases like "Little Tikes Trampoline", CL often returns 0 for the
-    // exact phrase but does have results for the product word ("trampoline").
-    // Expand to also search the last word of each long phrase.
+    // Build the set of CL search queries from the keywords:
+    //
+    // 1. All keywords as-is.
+    // 2. For 3+ word phrases, also search the last word — CL often returns 0 for
+    //    exact long phrases but has results for the product word alone.
+    // 3. If multiple keywords all share the same leading word (≥4 chars), also
+    //    search that word alone. This catches listings where the concept word
+    //    ("pokemon", "qidi") is in the title but the secondary descriptor
+    //    ("cards", "lot", "tcg") only appears in the body — CL finds them via
+    //    full-text search, our title matcher then qualifies them.
+    const firstWords = keywords.map(kw => kw.trim().split(/\s+/)[0].toLowerCase());
+    const sharedLead = keywords.length > 1 && firstWords.every(w => w === firstWords[0]) && firstWords[0].length >= 4
+      ? [firstWords[0]]
+      : [];
+
     const searchQueries = [...new Set([
       ...keywords,
       ...keywords
         .filter(kw => kw.trim().split(/\s+/).length >= 3)
         .map(kw => kw.trim().split(/\s+/).pop()),
+      ...sharedLead,
     ])];
 
     // Each keyword×market combination paginates independently via the s= offset
@@ -105,7 +118,7 @@ class CraigslistProvider {
               discoveredAt: new Date().toISOString(),
               raw:          { market, cl: true },
             }))
-            .filter(l => l.listingId);
+            .filter(l => l.listingId && l.title);
 
           pairItems.push(...page_items);
           if (raw.length < PAGE_SIZE) break; // last page

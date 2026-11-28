@@ -216,6 +216,32 @@ app.post("/api/searches/:id/check", async (req, res) => {
         db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id);
       } else {
         upsertMatch(db, search.id, listing_id, matchResult.classification, matchResult.reasons);
+        matches.push({ ...matchResult, listing });
+      }
+    }
+
+    // Re-run the matcher against all previously-REJECTED listings already in the DB
+    // for the same source(s) that this search uses. Criteria changes (new keywords,
+    // flex matching improvements) may now qualify listings that were rejected before —
+    // those listings won't appear in the current scan results, so without this pass
+    // they'd stay unmatched until they happen to be re-fetched from the provider.
+    const rejectedCandidates = db.prepare(`
+      SELECT l.id FROM listings l
+      JOIN sources src ON src.id = l.source_id
+      WHERE src.slug IN ('craigslist','facebook_marketplace')
+        AND l.id NOT IN (SELECT listing_id FROM search_matches WHERE search_id=?)
+        AND l.id NOT IN (SELECT value FROM json_each(?))
+        AND l.title != ''
+        AND l.title IS NOT NULL
+    `).all(search.id, JSON.stringify([...seenListingIds]));
+
+    for (const { id } of rejectedCandidates) {
+      const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(id);
+      if (!listing) continue;
+      const matchResult = matchListing(listing, search);
+      if (matchResult.classification !== "REJECTED") {
+        upsertMatch(db, search.id, id, matchResult.classification, matchResult.reasons);
+        matches.push({ ...matchResult, listing });
       }
     }
 
