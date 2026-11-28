@@ -1,112 +1,207 @@
 "use strict";
 const nodemailer = require("nodemailer");
+const { getPendingEvents, markEventsDelivered, markEventsFailed, updatePriceDropRef } = require("../db");
 
 let _transporter = null;
 
 function getTransporter() {
-  if (_transporter) return _transporter;
-  _transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_FROM,
-      pass: process.env.EMAIL_APP_PASSWORD,
-    },
-  });
+  if (!process.env.EMAIL_FROM || !process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("Email not configured — set EMAIL_FROM and EMAIL_APP_PASSWORD");
+  }
+  if (!_transporter) {
+    _transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: process.env.EMAIL_FROM, pass: process.env.EMAIL_APP_PASSWORD },
+    });
+  }
   return _transporter;
 }
 
-function buildAlertHtml(matches) {
-  const confirmed = matches.filter(m => m.classification === "CONFIRMED");
-  const possible = matches.filter(m => m.classification === "POSSIBLE");
+/**
+ * Gather all pending notification events for a saved search, send one
+ * consolidated email, then mark them delivered (or failed).
+ *
+ * At-least-once caveat: if the process crashes after SMTP accepts the message
+ * but before marking delivered, the events will be retried on the next scan.
+ */
+async function deliverPendingEvents(db, search) {
+  const events = getPendingEvents(db, search.id);
+  if (!events.length) return;
 
-  const date = new Date().toLocaleDateString("en-US", {
-    weekday: "long", year: "numeric", month: "long", day: "numeric",
+  const newMatchEvents  = events.filter(e => e.event_type === "new_match");
+  const priceDropEvents = events.filter(e => e.event_type === "price_drop");
+
+  const totalCount = events.length;
+  const subject = buildSubject(search.name, newMatchEvents.length, priceDropEvents.length);
+  const html    = buildHtml(search.name, newMatchEvents, priceDropEvents);
+
+  const transport = getTransporter(); // throws if unconfigured
+
+  await transport.sendMail({
+    from: `"Marketplace Alerts" <${process.env.EMAIL_FROM}>`,
+    to:   process.env.EMAIL_TO || process.env.EMAIL_FROM,
+    subject,
+    html,
   });
 
-  const fmt = p => p !== null && p !== undefined ? `$${Number(p).toFixed(0)}` : "—";
+  // Only reaches here on SMTP success
+  const eventIds = events.map(e => e.id);
+  const matchListingIds = events.map(e => ({ searchId: e.search_id, listingId: e.listing_id }));
+  markEventsDelivered(db, eventIds, matchListingIds);
 
-  function matchRow(m, i) {
-    const bg = i % 2 === 0 ? "#fdfaf2" : "#f8f2e4";
-    const badge = m.classification === "CONFIRMED"
-      ? `<span style="background:#e0f2e8;border:1px solid #1a6b38;color:#1a6b38;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">CONFIRMED</span>`
-      : `<span style="background:#fff3cd;border:1px solid #7a5a00;color:#7a5a00;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;">POSSIBLE</span>`;
-    const reasons = JSON.parse(m.reasons || "[]").slice(0, 3).join("; ");
-    return `<tr style="background:${bg};border-bottom:1px solid #e8dcc8;">
-      <td style="padding:10px 14px;">${badge}</td>
-      <td style="padding:10px 14px;font-weight:600;font-size:13px;color:#12243d;">${m.listing_title}</td>
-      <td style="padding:10px 14px;font-weight:700;font-size:14px;color:#12243d;">${fmt(m.price)}</td>
-      <td style="padding:10px 14px;font-size:11px;color:#8a7a60;">${m.location_text || "—"}</td>
-      <td style="padding:10px 14px;font-size:11px;color:#6a5a40;">${reasons}</td>
-      <td style="padding:10px 8px;text-align:center;">${m.listing_url ? `<a href="${m.listing_url}" style="color:#1a4a8a;font-size:12px;">View →</a>` : "—"}</td>
+  // Advance price_drop_ref for delivered price-drop events
+  for (const e of priceDropEvents) {
+    if (e.price_after !== null && e.price_after !== undefined) {
+      updatePriceDropRef(db, e.search_id, e.listing_id, e.price_after);
+    }
+  }
+
+  console.log(`[Notify] Delivered ${totalCount} event(s) for "${search.name}"`);
+}
+
+async function deliverPendingEventsWithRetry(db, search) {
+  try {
+    await deliverPendingEvents(db, search);
+  } catch (err) {
+    const events = getPendingEvents(db, search.id);
+    if (events.length) {
+      markEventsFailed(db, events.map(e => e.id), err.message);
+    }
+    console.error(`[Notify] Delivery failed for "${search.name}": ${err.message}`);
+  }
+}
+
+async function sendTestEmail() {
+  const transport = getTransporter(); // throws if unconfigured
+  const now = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
+  await transport.sendMail({
+    from: `"Marketplace Alerts" <${process.env.EMAIL_FROM}>`,
+    to:   process.env.EMAIL_TO || process.env.EMAIL_FROM,
+    subject: "Marketplace Alerts — Test Email",
+    html: `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:32px;background:#f1f5f9;">
+      <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:28px;border:1px solid #e2e8f0;">
+        <h2 style="color:#0f172a;margin-bottom:8px;">✓ Test Email</h2>
+        <p style="color:#475569;margin-bottom:16px;">Your Marketplace Alerts email configuration is working correctly.</p>
+        <p style="color:#94a3b8;font-size:13px;">Sent at ${now}</p>
+      </div>
+    </body></html>`,
+  });
+}
+
+function buildSubject(searchName, newCount, dropCount) {
+  const parts = [];
+  if (newCount  > 0) parts.push(`${newCount} new match${newCount  > 1 ? "es" : ""}`);
+  if (dropCount > 0) parts.push(`${dropCount} price drop${dropCount > 1 ? "s" : ""}`);
+  const summary = parts.join(", ");
+  return `🔔 Marketplace Alerts — ${searchName} — ${summary}`;
+}
+
+function buildHtml(searchName, newMatchEvents, priceDropEvents) {
+  const fmt     = p => (p !== null && p !== undefined) ? `$${Number(p).toLocaleString()}` : "—";
+  const fmtPct  = p => `${Number(p).toFixed(1)}%`;
+  const date    = new Date().toLocaleDateString("en-US", { weekday:"long", year:"numeric", month:"long", day:"numeric" });
+
+  function matchRow(e, i) {
+    const bg    = i % 2 === 0 ? "#fafafa" : "#f4f4f4";
+    const cls   = e.classification || "CONFIRMED";
+    const badge = cls === "CONFIRMED"
+      ? `<span style="background:#dcfce7;color:#16a34a;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">CONFIRMED</span>`
+      : `<span style="background:#fef3c7;color:#b45309;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">POSSIBLE</span>`;
+    const reasons = (() => {
+      try { return JSON.parse(e.reasons || "[]").slice(0,3).join("; "); } catch { return ""; }
+    })();
+    const src = (e.source_slug || "").includes("facebook") ? "FB" : "CL";
+    return `<tr style="background:${bg};border-bottom:1px solid #e5e7eb;">
+      <td style="padding:10px 12px;">${badge}</td>
+      <td style="padding:10px 12px;font-weight:600;font-size:13px;">${e.listing_title || "—"}</td>
+      <td style="padding:10px 12px;font-weight:700;font-size:14px;">${fmt(e.current_price)}</td>
+      <td style="padding:10px 12px;font-size:11px;color:#6b7280;">${src}</td>
+      <td style="padding:10px 12px;font-size:11px;color:#6b7280;">${e.location_text || "—"}</td>
+      <td style="padding:10px 12px;font-size:11px;color:#6b7280;">${reasons}</td>
+      <td style="padding:10px 8px;text-align:center;">${e.listing_url
+        ? `<a href="${e.listing_url}" style="color:#2563eb;font-size:12px;">View →</a>` : "—"}</td>
     </tr>`;
   }
 
-  const confirmedRows = confirmed.map((m, i) => matchRow(m, i)).join("");
-  const possibleRows = possible.map((m, i) => matchRow(m, i)).join("");
+  function dropRow(e, i) {
+    const bg       = i % 2 === 0 ? "#fafafa" : "#f4f4f4";
+    const before   = e.price_before;
+    const after    = e.price_after ?? e.current_price;
+    const dollar   = (before && after) ? (before - after) : null;
+    const pct      = (before && after && before > 0) ? ((before - after) / before * 100) : null;
+    return `<tr style="background:${bg};border-bottom:1px solid #e5e7eb;">
+      <td style="padding:10px 12px;font-weight:600;font-size:13px;">${e.listing_title || "—"}</td>
+      <td style="padding:10px 12px;font-size:13px;text-decoration:line-through;color:#9ca3af;">${fmt(before)}</td>
+      <td style="padding:10px 12px;font-weight:700;font-size:14px;color:#16a34a;">${fmt(after)}</td>
+      <td style="padding:10px 12px;font-size:12px;color:#16a34a;">${dollar ? `−${fmt(dollar)}` : "—"}</td>
+      <td style="padding:10px 12px;font-size:12px;color:#16a34a;">${pct ? fmtPct(pct) : "—"}</td>
+      <td style="padding:10px 12px;font-size:11px;color:#6b7280;">${e.location_text || "—"}</td>
+      <td style="padding:10px 8px;text-align:center;">${e.listing_url
+        ? `<a href="${e.listing_url}" style="color:#2563eb;font-size:12px;">View →</a>` : "—"}</td>
+    </tr>`;
+  }
+
+  const matchSection = newMatchEvents.length > 0 ? `
+    <div style="margin-bottom:24px;">
+      <div style="background:#166534;color:#fff;padding:10px 14px;border-radius:8px 8px 0 0;font-size:11px;font-weight:700;letter-spacing:0.08em;">
+        ✅ NEW MATCHES — ${newMatchEvents.length}
+      </div>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;overflow:hidden;">
+        <thead><tr style="background:#f0fdf4;">
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#166534;white-space:nowrap;">STATUS</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#166534;">TITLE</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#166534;">PRICE</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#166534;">SRC</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#166534;">LOCATION</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#166534;">REASON</th>
+          <th style="padding:7px 8px;font-size:10px;color:#166534;"></th>
+        </tr></thead>
+        <tbody>${newMatchEvents.map((e,i) => matchRow(e,i)).join("")}</tbody>
+      </table>
+    </div>` : "";
+
+  const dropSection = priceDropEvents.length > 0 ? `
+    <div style="margin-bottom:24px;">
+      <div style="background:#0369a1;color:#fff;padding:10px 14px;border-radius:8px 8px 0 0;font-size:11px;font-weight:700;letter-spacing:0.08em;">
+        📉 PRICE DROPS — ${priceDropEvents.length}
+      </div>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">
+        <thead><tr style="background:#f0f9ff;">
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#0369a1;">TITLE</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#0369a1;">WAS</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#0369a1;">NOW</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#0369a1;">DROP $</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#0369a1;">DROP %</th>
+          <th style="padding:7px 12px;text-align:left;font-size:10px;color:#0369a1;">LOCATION</th>
+          <th style="padding:7px 8px;font-size:10px;color:#0369a1;"></th>
+        </tr></thead>
+        <tbody>${priceDropEvents.map((e,i) => dropRow(e,i)).join("")}</tbody>
+      </table>
+    </div>` : "";
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f0e8d4;font-family:Arial,Helvetica,sans-serif;">
-<div style="max-width:720px;margin:0 auto;padding:0 0 32px;">
-  <div style="background:#12243d;padding:20px 28px;margin-bottom:24px;">
-    <div style="font-size:9px;color:#a89878;letter-spacing:0.2em;margin-bottom:6px;">MARKETPLACE ALERTS</div>
-    <div style="font-size:20px;font-weight:700;color:#f2ead8;">🔔 New Matching Listings</div>
-    <div style="font-size:11px;color:#7a8898;margin-top:4px;">${date}</div>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+<div style="max-width:760px;margin:0 auto;padding:0 0 32px;">
+  <div style="background:#0f172a;padding:20px 28px;margin-bottom:24px;">
+    <div style="font-size:9px;color:#94a3b8;letter-spacing:0.2em;margin-bottom:6px;">MARKETPLACE ALERTS</div>
+    <div style="font-size:20px;font-weight:700;color:#f8fafc;">🔔 ${escapeHtml(searchName)}</div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px;">${date}</div>
   </div>
   <div style="padding:0 20px;">
-    ${confirmed.length > 0 ? `
-    <div style="background:#fdfaf2;border:1.5px solid #1a6b38;border-radius:10px;overflow:hidden;margin-bottom:20px;">
-      <div style="padding:11px 14px;background:#1a6b38;">
-        <span style="font-size:10px;color:#fff;letter-spacing:0.12em;font-weight:700;">✅ CONFIRMED MATCHES — ${confirmed.length} LISTING${confirmed.length>1?"S":""}</span>
-      </div>
-      <table style="width:100%;border-collapse:collapse;">
-        <thead><tr style="background:#e0f2e8;">
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#1a6b38;letter-spacing:0.1em;">STATUS</th>
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#1a6b38;letter-spacing:0.1em;">TITLE</th>
-          <th style="padding:8px 14px;text-align:right;font-size:9px;color:#1a6b38;letter-spacing:0.1em;">PRICE</th>
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#1a6b38;letter-spacing:0.1em;">LOCATION</th>
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#1a6b38;letter-spacing:0.1em;">REASONS</th>
-          <th style="padding:8px 14px;font-size:9px;color:#1a6b38;letter-spacing:0.1em;"></th>
-        </tr></thead>
-        <tbody>${confirmedRows}</tbody>
-      </table>
-    </div>` : ""}
-    ${possible.length > 0 ? `
-    <div style="background:#fdfaf2;border:1.5px solid #7a5a00;border-radius:10px;overflow:hidden;margin-bottom:20px;">
-      <div style="padding:11px 14px;background:#f4edd8;border-bottom:1px solid #d4c4a0;">
-        <span style="font-size:10px;color:#7a5a00;letter-spacing:0.12em;font-weight:700;">⚠️ POSSIBLE MATCHES — ${possible.length} LISTING${possible.length>1?"S":""} (review needed)</span>
-      </div>
-      <table style="width:100%;border-collapse:collapse;">
-        <thead><tr style="background:#fff3cd;">
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#7a5a00;letter-spacing:0.1em;">STATUS</th>
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#7a5a00;letter-spacing:0.1em;">TITLE</th>
-          <th style="padding:8px 14px;text-align:right;font-size:9px;color:#7a5a00;letter-spacing:0.1em;">PRICE</th>
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#7a5a00;letter-spacing:0.1em;">LOCATION</th>
-          <th style="padding:8px 14px;text-align:left;font-size:9px;color:#7a5a00;letter-spacing:0.1em;">REASONS</th>
-          <th style="padding:8px 14px;font-size:9px;color:#7a5a00;letter-spacing:0.1em;"></th>
-        </tr></thead>
-        <tbody>${possibleRows}</tbody>
-      </table>
-    </div>` : ""}
-    <div style="text-align:center;font-size:10px;color:#b8a888;letter-spacing:0.1em;padding-top:14px;border-top:1px solid #d8caa8;">MARKETPLACE ALERTS · SELF-HOSTED ON OPTIPLEX</div>
+    ${matchSection}${dropSection}
+    <div style="text-align:center;font-size:10px;color:#94a3b8;padding-top:14px;border-top:1px solid #e2e8f0;">
+      MARKETPLACE ALERTS · SELF-HOSTED ON OPTIPLEX
+    </div>
   </div>
 </div></body></html>`;
 }
 
-async function sendAlertEmail(searchName, matches) {
-  if (!process.env.EMAIL_FROM || !process.env.EMAIL_APP_PASSWORD) return;
-  if (!matches.length) return;
-
-  const confirmed = matches.filter(m => m.classification === "CONFIRMED").length;
-  const possible = matches.filter(m => m.classification === "POSSIBLE").length;
-
-  const subject = `🔔 ${confirmed > 0 ? `${confirmed} Confirmed` : `${possible} Possible`} Match${matches.length > 1 ? "es" : ""} — ${searchName}`;
-
-  await getTransporter().sendMail({
-    from: `"Marketplace Alerts" <${process.env.EMAIL_FROM}>`,
-    to: process.env.EMAIL_TO || process.env.EMAIL_FROM,
-    subject,
-    html: buildAlertHtml(matches),
-  });
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-module.exports = { sendAlertEmail };
+module.exports = { deliverPendingEvents, deliverPendingEventsWithRetry, sendTestEmail };

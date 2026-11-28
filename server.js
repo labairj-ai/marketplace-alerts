@@ -2,16 +2,22 @@
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
-const { getDb, upsertListing, upsertMatch } = require("./src/db");
+const {
+  getDb, upsertListing, upsertMatch,
+  setSearchSources, getSearchSourcesMap,
+} = require("./src/db");
 const { matchListing } = require("./src/matcher");
 const { runSearch, getProviders, isDemo } = require("./src/providers");
+const { processScanResults } = require("./src/scan");
+const { deliverPendingEventsWithRetry, sendTestEmail } = require("./src/notify");
+const { scoreListings } = require("./src/scorer");
+const { distanceFromSearch } = require("./src/geo");
 const scheduler = require("./src/scheduler");
 
 const app = express();
 const PORT = process.env.PORT || 3457;
 
 app.use(express.json());
-// Cache static assets (JS/CSS/images) but never cache HTML
 app.use(express.static(path.join(__dirname, "public"), {
   setHeaders(res, filePath) {
     if (filePath.endsWith(".html")) {
@@ -21,13 +27,6 @@ app.use(express.static(path.join(__dirname, "public"), {
     }
   },
 }));
-
-function inferProductTypeFromKeywords(keywords) {
-  const kws = JSON.stringify(keywords).toLowerCase();
-  if (kws.includes("mac studio")) return "mac_studio";
-  if (kws.includes("qidi")) return "qidi_printer";
-  return null;
-}
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 
@@ -43,7 +42,8 @@ app.get("/api/status", async (req, res) => {
   const sources = db.prepare("SELECT * FROM sources").all();
   const lastScan = db.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").get();
   const totalListings = db.prepare("SELECT COUNT(*) as n FROM listings").get().n;
-  const totalMatches = db.prepare("SELECT COUNT(*) as n FROM search_matches").get().n;
+  const totalMatches  = db.prepare("SELECT COUNT(*) as n FROM search_matches").get().n;
+  const pendingAlerts = db.prepare("SELECT COUNT(*) as n FROM notification_events WHERE status='pending'").get().n;
 
   const sourceStatuses = {};
   for (const source of sources) {
@@ -62,11 +62,11 @@ app.get("/api/status", async (req, res) => {
     demo: isDemo(),
     sources: sourceStatuses,
     scheduler: {
-      running: scheduler.isRunning(),
-      lastRun: scheduler.getLastRun(),
-      nextRun: scheduler.getNextRun(),
+      running:  scheduler.isRunning(),
+      lastRun:  scheduler.getLastRun(),
+      nextRun:  scheduler.getNextRun(),
     },
-    stats: { totalListings, totalMatches },
+    stats: { totalListings, totalMatches, pendingAlerts },
     lastScan: lastScan || null,
   });
 });
@@ -83,12 +83,14 @@ app.get("/api/searches", (req, res) => {
   `).all();
 
   for (const s of searches) {
-    s.keywords = safeJson(s.keywords, []);
-    s.keyword_alts = safeJson(s.keyword_alts, []);
+    s.keywords         = safeJson(s.keywords, []);
+    s.keyword_alts     = safeJson(s.keyword_alts, []);
     s.exclude_keywords = safeJson(s.exclude_keywords, []);
-    s.specs = safeJson(s.specs, {});
-    s.enabled = !!s.enabled;
-    s.notify_email = !!s.notify_email;
+    s.specs            = safeJson(s.specs, {});
+    s.enabled          = !!s.enabled;
+    s.notify_email     = !!s.notify_email;
+    s.notify_price_drop = !!s.notify_price_drop;
+    s.sources          = getSearchSourcesMap(db, s.id);
   }
 
   res.json(searches);
@@ -100,26 +102,41 @@ app.post("/api/searches", (req, res) => {
   if (!b.name || !b.keywords?.length) {
     return res.status(400).json({ error: "name and keywords are required" });
   }
+
   const r = db.prepare(`
     INSERT INTO saved_searches
       (name, enabled, keywords, keyword_alts, brand, product_type, specs,
        price_min, price_max, center_lat, center_lon, center_label, radius_miles,
-       exclude_keywords, notify_email)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       exclude_keywords, notify_email, notify_price_drop, price_drop_min_dollars, price_drop_min_pct)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    b.name, b.enabled !== false ? 1 : 0,
+    b.name,
+    b.enabled !== false ? 1 : 0,
     JSON.stringify(b.keywords || []),
     JSON.stringify(b.keyword_alts || []),
-    b.brand || null, b.product_type || null,
+    b.brand || null,
+    b.product_type || null,
     JSON.stringify(b.specs || {}),
-    b.price_min ?? null, b.price_max ?? null,
-    b.center_lat ?? 39.1031, b.center_lon ?? -84.5120,
+    b.price_min ?? null,
+    b.price_max ?? null,
+    b.center_lat ?? 39.1031,
+    b.center_lon ?? -84.5120,
     b.center_label ?? "Cincinnati, OH",
     b.radius_miles ?? 75,
     JSON.stringify(b.exclude_keywords || []),
-    b.notify_email !== false ? 1 : 0
+    b.notify_email !== false ? 1 : 0,
+    b.notify_price_drop ? 1 : 0,
+    b.price_drop_min_dollars ?? null,
+    b.price_drop_min_pct ?? null,
   );
-  res.status(201).json({ id: r.lastInsertRowid });
+
+  const newId = r.lastInsertRowid;
+
+  // Set per-search sources (defaults to both enabled if not specified)
+  const sourcesMap = b.sources || { facebook_marketplace: true, craigslist: true };
+  setSearchSources(db, newId, Object.keys(sourcesMap).filter(k => sourcesMap[k]));
+
+  res.status(201).json({ id: newId });
 });
 
 app.put("/api/searches/:id", (req, res) => {
@@ -129,28 +146,77 @@ app.put("/api/searches/:id", (req, res) => {
   if (!existing) return res.status(404).json({ error: "not found" });
   const b = req.body;
 
+  // ── Price field semantics ──────────────────────────────────────────────────
+  // Field omitted (undefined) → retain existing value
+  // Field set to null         → clear the constraint
+  // Field set to a number     → update
+  // Invalid numeric           → 400
+  let priceMin = existing.price_min;
+  let priceMax = existing.price_max;
+
+  if ("price_min" in b) {
+    if (b.price_min === null) {
+      priceMin = null;
+    } else {
+      const v = Number(b.price_min);
+      if (isNaN(v)) return res.status(400).json({ error: "price_min must be a number or null" });
+      priceMin = v;
+    }
+  }
+
+  if ("price_max" in b) {
+    if (b.price_max === null) {
+      priceMax = null;
+    } else {
+      const v = Number(b.price_max);
+      if (isNaN(v)) return res.status(400).json({ error: "price_max must be a number or null" });
+      priceMax = v;
+    }
+  }
+
+  if (priceMin !== null && priceMax !== null && priceMin > priceMax) {
+    return res.status(400).json({ error: "price_min cannot be greater than price_max" });
+  }
+
+  // product_type: if explicitly provided in the request body, use it; otherwise retain existing.
+  // Do NOT infer from keywords — the user's explicit choice takes precedence.
+  const productType = "product_type" in b ? (b.product_type || null) : existing.product_type;
+
   db.prepare(`
     UPDATE saved_searches SET
       name=?, enabled=?, keywords=?, keyword_alts=?, brand=?, product_type=?, specs=?,
       price_min=?, price_max=?, center_lat=?, center_lon=?, center_label=?,
-      radius_miles=?, exclude_keywords=?, notify_email=?, updated_at=datetime('now')
+      radius_miles=?, exclude_keywords=?, notify_email=?,
+      notify_price_drop=?, price_drop_min_dollars=?, price_drop_min_pct=?,
+      updated_at=datetime('now')
     WHERE id=?
   `).run(
     b.name ?? existing.name,
     b.enabled !== undefined ? (b.enabled ? 1 : 0) : existing.enabled,
-    JSON.stringify(b.keywords ?? safeJson(existing.keywords, [])),
+    JSON.stringify(b.keywords  ?? safeJson(existing.keywords, [])),
     JSON.stringify(b.keyword_alts ?? safeJson(existing.keyword_alts, [])),
     b.brand ?? existing.brand,
-    inferProductTypeFromKeywords(b.keywords ?? safeJson(existing.keywords, [])),
+    productType,
     JSON.stringify(b.specs ?? safeJson(existing.specs, {})),
-    b.price_min ?? existing.price_min, b.price_max ?? existing.price_max,
-    b.center_lat ?? existing.center_lat, b.center_lon ?? existing.center_lon,
+    priceMin,
+    priceMax,
+    b.center_lat ?? existing.center_lat,
+    b.center_lon ?? existing.center_lon,
     b.center_label ?? existing.center_label,
     b.radius_miles ?? existing.radius_miles,
     JSON.stringify(b.exclude_keywords ?? safeJson(existing.exclude_keywords, [])),
     b.notify_email !== undefined ? (b.notify_email ? 1 : 0) : existing.notify_email,
-    id
+    b.notify_price_drop !== undefined ? (b.notify_price_drop ? 1 : 0) : (existing.notify_price_drop ?? 0),
+    "price_drop_min_dollars" in b ? (b.price_drop_min_dollars ?? null) : (existing.price_drop_min_dollars ?? null),
+    "price_drop_min_pct"     in b ? (b.price_drop_min_pct     ?? null) : (existing.price_drop_min_pct     ?? null),
+    id,
   );
+
+  if ("sources" in b && b.sources && typeof b.sources === "object") {
+    const enabled = Object.keys(b.sources).filter(k => b.sources[k]);
+    setSearchSources(db, id, enabled);
+  }
+
   res.json({ ok: true });
 });
 
@@ -179,74 +245,20 @@ app.post("/api/searches/:id/check", async (req, res) => {
   const demo = req.query.demo === "true" || isDemo();
 
   try {
-    const { results, sourceStatuses } = await runSearch(search, { demo });
+    const { results, matches, totalMatches, sourceStatuses } = await require("./src/scan").runSingleSearch(db, search, { demo });
 
-    const sourceRows = db.prepare("SELECT id, slug FROM sources").all();
-    const sourceMap = Object.fromEntries(sourceRows.map(r => [r.slug, r.id]));
+    res.json({ ok: true, sourceStatuses, results, matches, totalMatches, demo });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
-    const seenListingIds = new Set();
-    const matches = [];
-    for (const item of results) {
-      const sourceId = sourceMap[item._sourceSlug || "fixture"];
-      if (!sourceId) continue;
-      const listingId = upsertListing(db, sourceId, item);
-      seenListingIds.add(listingId);
-      const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(listingId);
-      const matchResult = matchListing(listing, search);
-      if (matchResult.classification !== "REJECTED") {
-        upsertMatch(db, search.id, listingId, matchResult.classification, matchResult.reasons);
-        matches.push({ ...matchResult, listing });
-      } else {
-        db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listingId);
-      }
-    }
+// ─── Test Email ───────────────────────────────────────────────────────────────
 
-    // Re-evaluate every existing match for this search — not just newly-scanned ones.
-    // This purges listings that were matched in a prior scan but are now out of scope
-    // (geo rule tightened, criteria changed, etc.) so Scan Now always reflects reality.
-    const existingMatches = db.prepare(
-      "SELECT sm.listing_id FROM search_matches sm WHERE sm.search_id=? AND sm.listing_id NOT IN (SELECT value FROM json_each(?))"
-    ).all(search.id, JSON.stringify([...seenListingIds]));
-
-    for (const { listing_id } of existingMatches) {
-      const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(listing_id);
-      if (!listing) { db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id); continue; }
-      const matchResult = matchListing(listing, search);
-      if (matchResult.classification === "REJECTED") {
-        db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id);
-      } else {
-        upsertMatch(db, search.id, listing_id, matchResult.classification, matchResult.reasons);
-        matches.push({ ...matchResult, listing });
-      }
-    }
-
-    // Re-run the matcher against all previously-REJECTED listings already in the DB
-    // for the same source(s) that this search uses. Criteria changes (new keywords,
-    // flex matching improvements) may now qualify listings that were rejected before —
-    // those listings won't appear in the current scan results, so without this pass
-    // they'd stay unmatched until they happen to be re-fetched from the provider.
-    const rejectedCandidates = db.prepare(`
-      SELECT l.id FROM listings l
-      JOIN sources src ON src.id = l.source_id
-      WHERE src.slug IN ('craigslist','facebook_marketplace')
-        AND l.id NOT IN (SELECT listing_id FROM search_matches WHERE search_id=?)
-        AND l.id NOT IN (SELECT value FROM json_each(?))
-        AND l.title != ''
-        AND l.title IS NOT NULL
-    `).all(search.id, JSON.stringify([...seenListingIds]));
-
-    for (const { id } of rejectedCandidates) {
-      const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(id);
-      if (!listing) continue;
-      const matchResult = matchListing(listing, search);
-      if (matchResult.classification !== "REJECTED") {
-        upsertMatch(db, search.id, id, matchResult.classification, matchResult.reasons);
-        matches.push({ ...matchResult, listing });
-      }
-    }
-
-    const totalMatches = db.prepare("SELECT COUNT(*) as n FROM search_matches WHERE search_id=?").get(search.id).n;
-    res.json({ ok: true, sourceStatuses, results: results.length, matches: matches.length, totalMatches, demo });
+app.post("/api/email/test", async (req, res) => {
+  try {
+    await sendTestEmail();
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -270,24 +282,49 @@ app.get("/api/listings", (req, res) => {
   `;
   const params = [];
 
-  if (search_id) { sql += " AND sm.search_id=?"; params.push(Number(search_id)); }
-  if (classification) { sql += " AND sm.classification=?"; params.push(classification); }
-  if (source) { sql += " AND s.slug=?"; params.push(source); }
+  if (search_id)      { sql += " AND sm.search_id=?";       params.push(Number(search_id)); }
+  if (classification) { sql += " AND sm.classification=?";  params.push(classification); }
+  if (source)         { sql += " AND s.slug=?";             params.push(source); }
 
+  // Fetch all first (needed for relative price scoring), then sort
   const orderMap = {
-    newest:     "sm.first_matched DESC",
-    listed_desc:"COALESCE(l.listed_at, l.discovered_at) DESC",
-    listed_asc: "COALESCE(l.listed_at, l.discovered_at) ASC",
-    price_asc:  "l.price ASC",
-    price_desc: "l.price DESC",
-    distance:   "l.id ASC",
+    newest:      "sm.first_matched DESC",
+    listed_desc: "COALESCE(l.listed_at, l.discovered_at) DESC",
+    listed_asc:  "COALESCE(l.listed_at, l.discovered_at) ASC",
+    price_asc:   "l.price ASC",
+    price_desc:  "l.price DESC",
+    distance:    "l.id ASC",
   };
-  sql += ` ORDER BY ${orderMap[sort] || orderMap.newest}`;
 
-  const rows = db.prepare(sql).all(...params);
+  const fetchSql = sql + ` ORDER BY ${orderMap[sort] || orderMap.newest}`;
+  let rows = db.prepare(fetchSql).all(...params);
+
   for (const r of rows) {
     r.reasons = safeJson(r.reasons, []);
   }
+
+  // Compute scores when searching within a specific saved search
+  if (search_id) {
+    const search = db.prepare("SELECT * FROM saved_searches WHERE id=?").get(Number(search_id));
+    if (search) {
+      // Augment rows with distance info for scorer
+      const augmented = rows.map(r => ({
+        ...r,
+        price: r.price,
+        latitude: r.latitude,
+        longitude: r.longitude,
+        listed_at: r.listed_at,
+        discovered_at: r.discovered_at,
+      }));
+      const scored = scoreListings(augmented, search);
+      rows = scored;
+
+      if (sort === "best_fit") {
+        rows = [...rows].sort((a, b) => (b.score || 0) - (a.score || 0));
+      }
+    }
+  }
+
   res.json(rows);
 });
 
@@ -333,10 +370,7 @@ app.get("/api/alerts/history", (req, res) => {
 
 app.get("/api/scans", (req, res) => {
   const db = getDb();
-  const rows = db.prepare(
-    "SELECT * FROM scan_runs ORDER BY id DESC LIMIT 50"
-  ).all();
-  res.json(rows);
+  res.json(db.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 50").all());
 });
 
 // ─── Sources ──────────────────────────────────────────────────────────────────

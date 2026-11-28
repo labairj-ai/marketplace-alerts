@@ -33,6 +33,9 @@
       --blue:        #2563eb;
       --blue-bg:     #dbeafe;
       --blue-br:     #93c5fd;
+      --teal:        #0f766e;
+      --teal-bg:     #ccfbf1;
+      --teal-br:     #5eead4;
       --header:      #0f172a;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -44,26 +47,17 @@
       -webkit-font-smoothing: antialiased;
     }
     input, select, textarea, button { font-family: inherit; }
-
     @keyframes pulse-dot {
       0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(74,222,128,0.4); }
       50%       { opacity: 0.7; transform: scale(0.9); box-shadow: 0 0 0 4px rgba(74,222,128,0); }
     }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    @keyframes slide-in {
-      from { transform: translateY(-8px); opacity: 0; }
-      to   { transform: translateY(0);    opacity: 1; }
-    }
-
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes slide-in { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
-
     a:hover { opacity: 0.8; }
     button:hover:not(:disabled) { opacity: 0.88; }
-
     @media (max-width: 700px) {
       .hide-mobile { display: none !important; }
       .ma-header { padding: 0 14px !important; }
@@ -80,10 +74,6 @@
       .ma-sidebar-label { display: none !important; }
       .ma-sidebar-add { flex-shrink: 0 !important; width: auto !important; }
       .ma-main { padding: 16px 12px !important; }
-      .history-grid { grid-template-columns: auto 1fr auto !important; }
-      .history-grid .hide-mobile { display: none !important; }
-      .scan-grid { grid-template-columns: auto 1fr auto !important; }
-      .scan-grid .hide-mobile { display: none !important; }
     }
   </style>
 </head>
@@ -130,6 +120,37 @@ function StatusBadge({ status }) {
 function ClassBadge({ cls }) {
   const c = cls === "CONFIRMED" ? CONFIRMED_C : POSSIBLE_C;
   return <Pill {...c}>{cls === "CONFIRMED" ? "●" : "◐"} {cls}</Pill>;
+}
+
+function ScoreBadge({ score, explanation }) {
+  if (score === null || score === undefined) return null;
+  const color = score >= 70 ? "var(--green)" : score >= 45 ? "var(--amber)" : "var(--muted)";
+  const bg    = score >= 70 ? "var(--green-bg)" : score >= 45 ? "var(--amber-bg)" : "var(--surface2)";
+  const br    = score >= 70 ? "var(--green-br)" : score >= 45 ? "var(--amber-br)" : "var(--border2)";
+  const tip   = explanation ? explanation.join(" · ") : "";
+  return (
+    <span title={tip} style={{background:bg,color,border:`1px solid ${br}`,borderRadius:6,
+      padding:"2px 8px",fontSize:11,fontWeight:700,cursor:"help",whiteSpace:"nowrap",
+      display:"inline-block"}}>
+      {score}/100
+    </span>
+  );
+}
+
+function PriceDropBadge({ history }) {
+  if (!history || history.length < 2) return null;
+  const prices = [...history].sort((a,b) => new Date(a.observed_at)-new Date(b.observed_at));
+  const first = prices[0].price, last = prices[prices.length-1].price;
+  if (last >= first) return null;
+  const drop = first - last;
+  const pct  = ((drop / first) * 100).toFixed(1);
+  return (
+    <span style={{fontSize:11,color:"var(--teal)",background:"var(--teal-bg)",
+      border:"1px solid var(--teal-br)",borderRadius:6,padding:"1px 6px",fontWeight:600,
+      whiteSpace:"nowrap",display:"inline-block",marginTop:2}}>
+      ↓ ${Math.round(drop)} ({pct}%)
+    </span>
+  );
 }
 
 function Btn({ onClick, children, variant="default", disabled, style={}, title }) {
@@ -258,20 +279,35 @@ const lbl = {
   display:"block", fontSize:11.5, color:"var(--text2)",
   fontWeight:600, marginBottom:5,
 };
+const divider = {
+  borderBottom:"1px solid var(--border)", margin:"18px 0 16px", paddingBottom:0,
+};
 
 const EMPTY_FORM = {
   name:"", enabled:true, keywords:"", keyword_alts:"", brand:"",
-  product_type:"", price_min:"", price_max:"", center_label:"Cincinnati, OH",
-  center_lat:39.1031, center_lon:-84.5120, radius_miles:75,
+  product_type:"", specs:{}, price_min:"", price_max:"",
+  center_label:"Cincinnati, OH", center_lat:39.1031, center_lon:-84.5120, radius_miles:75,
   exclude_keywords:"", notify_email:true,
+  notify_price_drop:false, price_drop_min_dollars:"", price_drop_min_pct:"",
+  sources:{ facebook_marketplace:true, craigslist:true },
 };
 
 function SearchModal({ initial, onSave, onClose }) {
   const [form, setForm] = useState(initial || EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const pt = form.product_type || "";
 
   async function save() {
+    setErr(null);
+    if (!form.name.trim()) return setErr("Name is required.");
+    if (!form.keywords.trim()) return setErr("At least one keyword is required.");
+    if (form.notify_price_drop && !form.price_drop_min_dollars && !form.price_drop_min_pct) {
+      return setErr("Enter a price-drop threshold ($ or %) to enable price-drop alerts.");
+    }
     setSaving(true);
+
     const payload = {
       ...form,
       keywords:         form.keywords.split(",").map(k=>k.trim()).filter(Boolean),
@@ -282,6 +318,13 @@ function SearchModal({ initial, onSave, onClose }) {
       center_lat: parseFloat(form.center_lat),
       center_lon: parseFloat(form.center_lon),
       radius_miles: parseFloat(form.radius_miles),
+      specs: (pt === "mac_studio" && form.macMinRam)
+        ? { minRamGb: parseInt(form.macMinRam, 10) }
+        : (form.specs || {}),
+      product_type: pt || null,
+      notify_price_drop: form.notify_price_drop ? true : false,
+      price_drop_min_dollars: form.price_drop_min_dollars !== "" ? parseFloat(form.price_drop_min_dollars) : null,
+      price_drop_min_pct:     form.price_drop_min_pct     !== "" ? parseFloat(form.price_drop_min_pct)     : null,
     };
     await onSave(payload);
     setSaving(false);
@@ -290,7 +333,7 @@ function SearchModal({ initial, onSave, onClose }) {
   const F = (key, label, props={}) => (
     <div style={{marginBottom:14}}>
       <label style={lbl}>{label}</label>
-      <input value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})} style={inp} {...props} />
+      <input value={form[key]??""} onChange={e=>setForm({...form,[key]:e.target.value})} style={inp} {...props} />
     </div>
   );
 
@@ -298,14 +341,14 @@ function SearchModal({ initial, onSave, onClose }) {
     <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",display:"flex",
       alignItems:"center",justifyContent:"center",zIndex:1000,backdropFilter:"blur(4px)"}}>
       <div style={{background:"var(--surface)",borderRadius:16,padding:"28px 32px",
-        width:"min(560px,96vw)",maxHeight:"90vh",overflowY:"auto",
+        width:"min(580px,96vw)",maxHeight:"92vh",overflowY:"auto",
         boxShadow:"0 24px 64px rgba(0,0,0,0.28)",border:"1px solid var(--border)",
         animation:"slide-in 0.18s ease-out"}}>
-        <div style={{fontSize:16,fontWeight:700,color:"var(--text)",marginBottom:24,letterSpacing:"-0.01em"}}>
+        <div style={{fontSize:16,fontWeight:700,color:"var(--text)",marginBottom:22,letterSpacing:"-0.01em"}}>
           {initial ? "Edit search" : "New saved search"}
         </div>
 
-        {F("name", "Name")}
+        {F("name","Name")}
 
         <div style={{marginBottom:14}}>
           <label style={lbl}>Keywords <span style={{fontWeight:400,color:"var(--muted)"}}>comma-separated</span></label>
@@ -319,53 +362,130 @@ function SearchModal({ initial, onSave, onClose }) {
             style={inp} placeholder="e.g. M1 Ultra Mac Studio" />
         </div>
 
+        {/* Product type */}
+        <div style={{marginBottom:14}}>
+          <label style={lbl}>Product type <span style={{fontWeight:400,color:"var(--muted)"}}>optional — enables product-specific matching rules</span></label>
+          <select value={pt} onChange={e=>setForm({...form,product_type:e.target.value})} style={{...inp,cursor:"pointer"}}>
+            <option value="">General search</option>
+            <option value="mac_studio">Apple Mac Studio</option>
+            <option value="qidi_printer">QIDI 3D Printer</option>
+          </select>
+        </div>
+
+        {pt === "mac_studio" && (
+          <div style={{marginBottom:14,background:"var(--blue-bg)",border:"1px solid var(--blue-br)",
+            borderRadius:8,padding:"12px 14px"}}>
+            <div style={{fontSize:12,fontWeight:600,color:"var(--blue)",marginBottom:10}}>Mac Studio requirements</div>
+            <div>
+              <label style={{...lbl,color:"var(--blue)"}}>Minimum RAM (GB)</label>
+              <input type="number" value={form.macMinRam??""} onChange={e=>setForm({...form,macMinRam:e.target.value})}
+                style={{...inp,width:120}} placeholder="e.g. 64" />
+              <div style={{fontSize:11,color:"var(--blue)",marginTop:4}}>
+                Listings with less RAM will be REJECTED. Unspecified RAM = POSSIBLE.
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={divider} />
+
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
           <div>
             <label style={lbl}>Min price</label>
-            <input type="number" value={form.price_min}
-              onChange={e=>setForm({...form,price_min:e.target.value})} style={inp} placeholder="no minimum" />
+            <input type="number" value={form.price_min??""} onChange={e=>setForm({...form,price_min:e.target.value})} style={inp} placeholder="no minimum" />
           </div>
           <div>
             <label style={lbl}>Max price <span style={{fontWeight:400,color:"var(--muted)"}}>strict &lt;</span></label>
-            <input type="number" value={form.price_max}
-              onChange={e=>setForm({...form,price_max:e.target.value})} style={inp} placeholder="no maximum" />
+            <input type="number" value={form.price_max??""} onChange={e=>setForm({...form,price_max:e.target.value})} style={inp} placeholder="no maximum" />
           </div>
         </div>
 
         <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:10,marginBottom:14}}>
           <div>
             <label style={lbl}>Search center</label>
-            <input value={form.center_label} onChange={e=>setForm({...form,center_label:e.target.value})}
+            <input value={form.center_label??""} onChange={e=>setForm({...form,center_label:e.target.value})}
               style={inp} placeholder="Cincinnati, OH" />
           </div>
           <div>
             <label style={lbl}>Radius (mi)</label>
-            <input type="number" value={form.radius_miles}
-              onChange={e=>setForm({...form,radius_miles:e.target.value})} style={inp} />
+            <input type="number" value={form.radius_miles??75} onChange={e=>setForm({...form,radius_miles:e.target.value})} style={inp} />
           </div>
         </div>
 
         <div style={{marginBottom:14}}>
           <label style={lbl}>Exclude keywords <span style={{fontWeight:400,color:"var(--muted)"}}>comma-separated</span></label>
-          <input value={form.exclude_keywords} onChange={e=>setForm({...form,exclude_keywords:e.target.value})}
+          <input value={form.exclude_keywords??""} onChange={e=>setForm({...form,exclude_keywords:e.target.value})}
             style={inp} placeholder="e.g. Studio Display, MacBook, broken" />
         </div>
 
-        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:26}}>
+        <div style={divider} />
+
+        {/* Search marketplaces */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11.5,fontWeight:600,color:"var(--text2)",marginBottom:8}}>Search marketplaces</div>
+          <div style={{display:"flex",gap:16}}>
+            {[["facebook_marketplace","Facebook Marketplace"],["craigslist","Craigslist"]].map(([slug,label]) => (
+              <label key={slug} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13}}>
+                <input type="checkbox"
+                  checked={form.sources?.[slug] !== false}
+                  onChange={e=>setForm({...form,sources:{...form.sources,[slug]:e.target.checked}})} />
+                {label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div style={divider} />
+
+        {/* Price-drop alerts */}
+        <div style={{marginBottom:14}}>
+          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,marginBottom:10}}>
+            <input type="checkbox" checked={!!form.notify_price_drop}
+              onChange={e=>setForm({...form,notify_price_drop:e.target.checked})} />
+            <span style={{fontWeight:600}}>Notify me when a listing's price drops</span>
+          </label>
+          {form.notify_price_drop && (
+            <div style={{paddingLeft:22,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div>
+                <label style={lbl}>Minimum drop ($)</label>
+                <input type="number" value={form.price_drop_min_dollars??""} style={inp} placeholder="e.g. 25"
+                  onChange={e=>setForm({...form,price_drop_min_dollars:e.target.value})} />
+              </div>
+              <div>
+                <label style={lbl}>Minimum drop (%)</label>
+                <input type="number" value={form.price_drop_min_pct??""} style={inp} placeholder="e.g. 10"
+                  onChange={e=>setForm({...form,price_drop_min_pct:e.target.value})} />
+              </div>
+              <div style={{gridColumn:"1/-1",fontSize:11,color:"var(--muted)"}}>
+                Either threshold can trigger an alert. Leave both blank to alert on any price drop.
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={divider} />
+
+        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:22}}>
           <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13}}>
-            <input type="checkbox" checked={form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})} />
+            <input type="checkbox" checked={!!form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})} />
             Enabled
           </label>
           <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13}}>
-            <input type="checkbox" checked={form.notify_email} onChange={e=>setForm({...form,notify_email:e.target.checked})} />
+            <input type="checkbox" checked={!!form.notify_email} onChange={e=>setForm({...form,notify_email:e.target.checked})} />
             Email on confirmed match
           </label>
         </div>
 
+        {err && (
+          <div style={{background:"var(--red-bg)",border:"1px solid var(--red-br)",borderRadius:7,
+            padding:"9px 12px",color:"var(--red)",fontSize:12.5,marginBottom:14}}>
+            {err}
+          </div>
+        )}
+
         <div style={{display:"flex",gap:10}}>
           <Btn onClick={onClose} variant="ghost" style={{flex:1,justifyContent:"center"}}>Cancel</Btn>
-          <Btn onClick={save} variant="primary" disabled={saving||!form.name||!form.keywords}
-            style={{flex:2,justifyContent:"center"}}>
+          <Btn onClick={save} variant="primary" disabled={saving} style={{flex:2,justifyContent:"center"}}>
             {saving ? "Saving…" : initial ? "Update search" : "Save search"}
           </Btn>
         </div>
@@ -376,7 +496,7 @@ function SearchModal({ initial, onSave, onClose }) {
 
 /* ─── Single search detail view ─────────────────────────────── */
 function SearchDetailView({ search, onCheckNow, onEdit, onDelete, onToggle }) {
-  const [sort, setSort]               = useState("listed_desc");
+  const [sort, setSort]               = useState("best_fit");
   const [filterClass, setFilterClass] = useState("ALL");
   const [listings, setListings]       = useState([]);
   const [loading, setLoading]         = useState(true);
@@ -403,9 +523,13 @@ function SearchDetailView({ search, onCheckNow, onEdit, onDelete, onToggle }) {
   const fmtPrice  = p => p != null ? `$${Number(p).toLocaleString()}` : "—";
   const fmtDate   = d => d ? new Date(d).toLocaleDateString() : "—";
 
+  // Source chips for the search header
+  const activeSources = search.sources
+    ? Object.entries(search.sources).filter(([,v])=>v).map(([k])=>k)
+    : ["facebook_marketplace","craigslist"];
+
   return (
     <div>
-      {/* Search header */}
       <div style={{marginBottom:18}}>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:8}}>
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -415,8 +539,9 @@ function SearchDetailView({ search, onCheckNow, onEdit, onDelete, onToggle }) {
               border={search.enabled?"var(--green-br)":"var(--border2)"}>
               {search.enabled?"● Active":"○ Paused"}
             </Pill>
+            {activeSources.map(slug => <SourceChip key={slug} name={slug} />)}
             {confirmed.length > 0 && <Pill {...CONFIRMED_C}>{confirmed.length} confirmed</Pill>}
-            {possible.length > 0  && <Pill {...POSSIBLE_C}>{possible.length} possible</Pill>}
+            {possible.length  > 0 && <Pill {...POSSIBLE_C}>{possible.length} possible</Pill>}
           </div>
           <div style={{display:"flex",gap:5,flexShrink:0}}>
             <Btn onClick={handleCheck} variant="success" disabled={checking} style={{padding:"5px 11px",fontSize:12.5}}>
@@ -430,12 +555,12 @@ function SearchDetailView({ search, onCheckNow, onEdit, onDelete, onToggle }) {
           </div>
         </div>
 
-        {/* Controls */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           <SegmentedControl options={["ALL","CONFIRMED","POSSIBLE"]} value={filterClass} onChange={setFilterClass} />
           <select value={sort} onChange={e => setSort(e.target.value)} style={{
             border:"1.5px solid var(--border2)",borderRadius:8,padding:"5px 10px",
             fontSize:12.5,background:"var(--surface)",color:"var(--text)",cursor:"pointer"}}>
+            <option value="best_fit">Best Fit</option>
             <option value="listed_desc">Listed: newest first</option>
             <option value="listed_asc">Listed: oldest first</option>
             <option value="price_asc">Price: low → high</option>
@@ -453,15 +578,16 @@ function SearchDetailView({ search, onCheckNow, onEdit, onDelete, onToggle }) {
             </div>
           ) : (
             <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-              <table style={{width:"100%",minWidth:460,borderCollapse:"collapse",fontSize:13}}>
+              <table style={{width:"100%",minWidth:520,borderCollapse:"collapse",fontSize:13}}>
                 <thead>
                   <tr>
-                    <th style={{...TH,width:"44%"}}>Title</th>
+                    <th style={{...TH,width:"40%"}}>Title</th>
                     <th style={{...TH,textAlign:"right"}}>Price</th>
+                    <th style={{...TH}}>Fit</th>
                     <th style={{...TH}}>Match</th>
-                    <th style={{...TH}}>Source</th>
-                    <th style={{...TH}} className="hide-mobile">Location</th>
-                    <th style={{...TH}} className="hide-mobile">Listed</th>
+                    <th style={{...TH}}>Src</th>
+                    <th className="hide-mobile" style={{...TH}}>Location</th>
+                    <th className="hide-mobile" style={{...TH}}>Listed</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -476,11 +602,21 @@ function SearchDetailView({ search, onCheckNow, onEdit, onDelete, onToggle }) {
                             {l.title}
                           </a>
                         </div>
+                        {l.scoreExplanation && (
+                          <div style={{fontSize:11,color:"var(--muted)",marginTop:2,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {l.scoreExplanation.join(" · ")}
+                          </div>
+                        )}
                       </td>
-                      <td style={{...TD,textAlign:"right",fontWeight:700,fontSize:14,
-                        color:"var(--text)",whiteSpace:"nowrap",
-                        fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
-                        {fmtPrice(l.price)}
+                      <td style={{...TD,textAlign:"right",whiteSpace:"nowrap"}}>
+                        <div style={{fontWeight:700,fontSize:14,color:"var(--text)",
+                          fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>
+                          {fmtPrice(l.price)}
+                        </div>
+                      </td>
+                      <td style={{...TD,whiteSpace:"nowrap"}}>
+                        <ScoreBadge score={l.score} explanation={l.scoreExplanation} />
                       </td>
                       <td style={{...TD,whiteSpace:"nowrap"}}>
                         <ClassBadge cls={l.classification} />
@@ -533,7 +669,7 @@ function HistoryView() {
         {history.length === 0 ? (
           <div style={{padding:24,textAlign:"center",color:"var(--muted)",fontSize:13}}>No match history yet.</div>
         ) : history.slice(0,50).map((h,i) => (
-          <div key={h.id} className="history-grid" style={{
+          <div key={h.id} style={{
             display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",
             gap:12,padding:"11px 20px",borderTop:i>0?"1px solid var(--border)":"none",
             alignItems:"center",background:i%2===0?"var(--surface)":"var(--surface2)"}}>
@@ -566,7 +702,7 @@ function HistoryView() {
             ? {bg:"var(--blue-bg)", color:"var(--blue)", border:"var(--blue-br)"}
             : {bg:"var(--red-bg)",  color:"var(--red)",  border:"var(--red-br)"};
           return (
-            <div key={s.id} className="scan-grid" style={{
+            <div key={s.id} style={{
               display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",
               gap:12,padding:"10px 20px",borderTop:i>0?"1px solid var(--border)":"none",
               alignItems:"center",background:i%2===0?"var(--surface)":"var(--surface2)"}}>
@@ -587,14 +723,29 @@ function HistoryView() {
 
 /* ─── Status view ────────────────────────────────────────────── */
 function StatusView() {
-  const [status, setStatus] = useState(null);
+  const [status, setStatus]   = useState(null);
   const [loading, setLoading] = useState(true);
+  const [testState, setTestState] = useState(null); // null | "sending" | "ok" | "error"
+  const [testMsg, setTestMsg] = useState("");
 
   const load = useCallback(() => {
     setLoading(true);
     API("/api/status").then(d => { setStatus(d); setLoading(false); });
   }, []);
   useEffect(() => { load(); const t = setInterval(load,30000); return ()=>clearInterval(t); }, [load]);
+
+  async function sendTest() {
+    setTestState("sending");
+    setTestMsg("");
+    try {
+      const r = await fetch("/api/email/test",{method:"POST"}).then(r=>r.json());
+      if (r.ok) { setTestState("ok"); setTestMsg("Test email sent successfully."); }
+      else       { setTestState("error"); setTestMsg(r.error || "Send failed."); }
+    } catch {
+      setTestState("error"); setTestMsg("Network error.");
+    }
+    setTimeout(() => setTestState(null), 6000);
+  }
 
   if (loading) return <Loader />;
   const fmtDate = d => d ? new Date(d).toLocaleString() : "Never";
@@ -614,11 +765,12 @@ function StatusView() {
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:20}}>
         {[
-          {label:"Scheduler",     value: status?.scheduler?.running ? "Running" : "Idle", hi: status?.scheduler?.running},
-          {label:"Last run",      value: status?.scheduler?.lastRun?.at ? new Date(status.scheduler.lastRun.at).toLocaleTimeString() : "Never"},
-          {label:"Next run",      value: status?.scheduler?.nextRun ? new Date(status.scheduler.nextRun).toLocaleTimeString() : "—"},
-          {label:"Total listings",value: status?.stats?.totalListings ?? 0},
-          {label:"Total matches", value: status?.stats?.totalMatches ?? 0},
+          {label:"Scheduler",      value: status?.scheduler?.running ? "Running" : "Idle", hi: status?.scheduler?.running},
+          {label:"Last run",       value: status?.scheduler?.lastRun?.at ? new Date(status.scheduler.lastRun.at).toLocaleTimeString() : "Never"},
+          {label:"Next run",       value: status?.scheduler?.nextRun ? new Date(status.scheduler.nextRun).toLocaleTimeString() : "—"},
+          {label:"Total listings", value: status?.stats?.totalListings ?? 0},
+          {label:"Total matches",  value: status?.stats?.totalMatches  ?? 0},
+          {label:"Pending alerts", value: status?.stats?.pendingAlerts ?? 0},
         ].map(({label,value,hi}) => (
           <div key={label} style={{background:"var(--surface)",border:"1px solid var(--border)",
             borderRadius:10,padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}>
@@ -631,7 +783,7 @@ function StatusView() {
 
       <Card style={{marginBottom:16}}>
         <CardHeader>Data sources</CardHeader>
-        {Object.entries(status?.sources||{}).map(([slug,src],i,arr) => (
+        {Object.entries(status?.sources||{}).map(([slug,src],i) => (
           <div key={slug} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
             padding:"14px 20px",borderTop:i>0?"1px solid var(--border)":"none",gap:12,flexWrap:"wrap"}}>
             <div>
@@ -642,6 +794,21 @@ function StatusView() {
             <StatusBadge status={src.status} />
           </div>
         ))}
+      </Card>
+
+      {/* Email test */}
+      <Card style={{marginBottom:16}}>
+        <CardHeader>Email notifications</CardHeader>
+        <div style={{padding:"16px 20px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          <Btn onClick={sendTest} variant="ghost" disabled={testState==="sending"}>
+            {testState==="sending" ? "Sending…" : "✉ Send Test Email"}
+          </Btn>
+          {testMsg && (
+            <span style={{fontSize:13,color: testState==="ok" ? "var(--green)" : "var(--red)", fontWeight:500}}>
+              {testState==="ok" ? "✓" : "✕"} {testMsg}
+            </span>
+          )}
+        </div>
       </Card>
 
       {status?.lastScan && (
@@ -662,17 +829,16 @@ function StatusView() {
 
 /* ─── App shell ──────────────────────────────────────────────── */
 function App() {
-  const [searches, setSearches]   = useState([]);
+  const [searches, setSearches]     = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [section, setSection]     = useState("search"); // "search" | "history" | "status"
-  const [modal, setModal]         = useState(null);
-  const [toast, setToast]         = useState(null);
-  const [schedulerOn, setSchedOn] = useState(false);
+  const [section, setSection]       = useState("search");
+  const [modal, setModal]           = useState(null);
+  const [toast, setToast]           = useState(null);
+  const [schedulerOn, setSchedOn]   = useState(false);
 
   function reloadSearches() {
     API("/api/searches").then(s => {
       setSearches(s);
-      // Auto-select first search if none chosen yet
       setSelectedId(prev => prev ?? (s[0]?.id ?? null));
     });
   }
@@ -700,9 +866,13 @@ function App() {
 
   async function saveSearch(payload) {
     if (modal && modal.id) {
-      await fetch(`/api/searches/${modal.id}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+      await fetch(`/api/searches/${modal.id}`, {
+        method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload),
+      });
     } else {
-      const r = await fetch("/api/searches",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then(r=>r.json());
+      const r = await fetch("/api/searches",{
+        method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload),
+      }).then(r=>r.json());
       if (r.id) { setSelectedId(r.id); setSection("search"); }
     }
     setModal(null);
@@ -721,11 +891,14 @@ function App() {
   }
 
   async function toggleSearch(s) {
-    await fetch(`/api/searches/${s.id}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!s.enabled})});
+    await fetch(`/api/searches/${s.id}`,{
+      method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({enabled:!s.enabled}),
+    });
     reloadSearches();
   }
 
   function editForm(s) {
+    const specs = s.specs || {};
     return {
       name:s.name, enabled:s.enabled, notify_email:s.notify_email,
       keywords:(s.keywords||[]).join(", "),
@@ -734,6 +907,13 @@ function App() {
       price_min:s.price_min??"", price_max:s.price_max??"",
       center_label:s.center_label, center_lat:s.center_lat, center_lon:s.center_lon,
       radius_miles:s.radius_miles,
+      product_type:s.product_type||"",
+      specs,
+      macMinRam: specs.minRamGb ? String(specs.minRamGb) : "",
+      notify_price_drop: !!s.notify_price_drop,
+      price_drop_min_dollars: s.price_drop_min_dollars??"",
+      price_drop_min_pct:     s.price_drop_min_pct??"",
+      sources: s.sources || { facebook_marketplace:true, craigslist:true },
     };
   }
 
@@ -743,7 +923,11 @@ function App() {
   return (
     <div style={{display:"flex",flexDirection:"column",minHeight:"100vh"}}>
       {modal !== null && (
-        <SearchModal initial={modal==="new"?null:editForm(modal)} onSave={saveSearch} onClose={()=>setModal(null)} />
+        <SearchModal
+          initial={modal==="new" ? null : editForm(modal)}
+          onSave={saveSearch}
+          onClose={()=>setModal(null)}
+        />
       )}
 
       {toast && (
@@ -756,7 +940,7 @@ function App() {
         </div>
       )}
 
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="ma-header" style={{background:"var(--header)",position:"sticky",top:0,zIndex:100,
         display:"flex",alignItems:"center",justifyContent:"space-between",
         padding:"0 20px",height:50,
@@ -783,9 +967,8 @@ function App() {
         </div>
       </div>
 
-      {/* ── Body ── */}
+      {/* Body */}
       <div className="ma-body" style={{display:"flex",flex:1,alignItems:"flex-start"}}>
-
         {/* Sidebar */}
         <div className="ma-sidebar" style={{
           width:210,flexShrink:0,padding:"14px 10px",
@@ -794,12 +977,10 @@ function App() {
           position:"sticky",top:50,
           background:"var(--surface)",
           display:"flex",flexDirection:"column",gap:2}}>
-
           <div className="ma-sidebar-label" style={{fontSize:10,fontWeight:700,color:"var(--muted)",
             letterSpacing:"0.08em",textTransform:"uppercase",padding:"2px 8px 8px"}}>
             Searches
           </div>
-
           {searches.map(s => {
             const isActive = section === "search" && selectedId === s.id;
             return (
@@ -813,8 +994,7 @@ function App() {
                     background:s.enabled?"var(--green)":"var(--border2)"}} />
                   <span style={{fontSize:12.5,fontWeight:isActive?600:500,
                     color:isActive?"var(--accent)":"var(--text)",
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,
-                    minWidth:0}}>
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}}>
                     {s.name}
                   </span>
                   {s.match_count > 0 && (
@@ -828,7 +1008,6 @@ function App() {
               </button>
             );
           })}
-
           <button className="ma-sidebar-add" onClick={() => setModal("new")} style={{
             width:"100%",textAlign:"left",padding:"7px 10px",borderRadius:7,marginTop:4,
             background:"transparent",border:"1.5px dashed var(--border2)",
@@ -838,7 +1017,7 @@ function App() {
           </button>
         </div>
 
-        {/* Main content */}
+        {/* Main */}
         <div className="ma-main" style={{flex:1,padding:"22px 22px",minWidth:0}}>
           {section === "search" && (
             selectedSearch

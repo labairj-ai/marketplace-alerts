@@ -182,7 +182,9 @@ function checkPrice(listing, search) {
 function applyGeo(listing, search) {
   const { miles, approximate, unverified } = distanceFromSearch(listing, search);
   if (unverified) {
-    return { geoRejected: true, geoReason: "Location unknown — cannot verify within radius", unverified: true, miles: null, approximate: false };
+    // Unknown location: don't hard-reject — geo filtering is done at the provider level.
+    // Mark as unverified so the scorer applies a conservative distance score.
+    return { geoRejected: false, geoReason: "Location unknown", unverified: true, miles: null, approximate: false };
   }
   const radius = search.radius_miles || 75;
   if (miles > radius) {

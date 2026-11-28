@@ -135,13 +135,10 @@ function matchMacStudio(listing, search) {
     return { classification: "CONFIRMED", reasons };
   }
 
-  // No RAM stated — confirm if variant implies high memory, otherwise possible
-  if (isHighMemVariant(combined)) {
-    reasons.push("High-memory variant — RAM not stated but typically ≥64GB");
-    return { classification: "CONFIRMED", reasons };
-  }
-
-  reasons.push("RAM not stated in listing");
+  // No RAM stated — cannot verify requirement without explicit confirmation
+  reasons.push(isHighMemVariant(combined)
+    ? "High-memory variant — RAM not stated, cannot verify against requirement"
+    : "RAM not stated in listing");
   return { classification: "POSSIBLE", reasons };
 }
 

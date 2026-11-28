@@ -34,13 +34,12 @@ async function main() {
   await page.goto("https://www.facebook.com/login");
 
   console.log("\n✓ Browser opened.");
-  console.log("  Log in to Facebook. The script will continue automatically.\n");
+  console.log("  Log in to Facebook (complete any captcha/2FA too).");
+  console.log("  Press Enter here once you see the Facebook home feed.\n");
 
-  // Wait until redirected away from login/checkpoint pages (up to 5 min)
-  await page.waitForURL(
-    url => !url.includes("/login") && !url.includes("/checkpoint"),
-    { timeout: 300000 }
-  );
+  // Wait for the user to signal they're fully logged in
+  await new Promise(resolve => process.stdin.once("data", resolve));
+  process.stdin.pause();
 
   // Brief pause for cookies to settle
   await page.waitForTimeout(2000);
