@@ -1,5 +1,7 @@
 "use strict";
 
+const { haversine } = require("../geo");
+
 /**
  * Craigslist Provider — JSON Search API
  *
@@ -42,7 +44,10 @@ class CraigslistProvider {
     }
   }
 
-  async search({ keywords = [] } = {}) {
+  async search({ keywords = [], search } = {}) {
+    const centerLat   = search?.center_lat   ?? 39.1031;
+    const centerLon   = search?.center_lon   ?? -84.5120;
+    const radiusMiles = search?.radius_miles ?? 75;
     if (!keywords.length) return [];
 
     // For 3+ word phrases like "Little Tikes Trampoline", CL often returns 0 for the
@@ -98,13 +103,19 @@ class CraigslistProvider {
       }
     }));
 
-    // Deduplicate across all parallel results by PostingID
+    // Deduplicate across all parallel results by PostingID, then geo-filter.
+    // CL provides lat/lon directly — apply the same radius check FB does at the
+    // provider level so out-of-range listings never reach the matcher or DB.
     const seen = new Set();
     const listings = [];
     for (const batch of allResults) {
       for (const l of batch) {
         if (seen.has(l.listingId)) continue;
         seen.add(l.listingId);
+        if (l.latitude && l.longitude) {
+          const dist = haversine(centerLat, centerLon, l.latitude, l.longitude);
+          if (dist > radiusMiles) continue;
+        }
         listings.push(l);
       }
     }

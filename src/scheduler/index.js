@@ -134,6 +134,34 @@ async function runSingleSearch(search, { db, demo }) {
     }
   }
 
+  // Re-evaluate existing matches that weren't in this scan — prune any that
+  // now fail the matcher criteria (geo tightened, criteria changed, etc.)
+  const seenListingIds = new Set(results.map(item => {
+    const sourceSlug = item._sourceSlug || "fixture";
+    const sourceId = sourceMap[sourceSlug];
+    if (!sourceId) return null;
+    const existing = db.prepare(
+      "SELECT id FROM listings WHERE source_id=? AND external_id=?"
+    ).get(sourceId, item.listingId);
+    return existing?.id ?? null;
+  }).filter(Boolean));
+
+  const staleCandidates = db.prepare(
+    "SELECT sm.listing_id FROM search_matches sm WHERE sm.search_id=? AND sm.listing_id NOT IN (SELECT value FROM json_each(?))"
+  ).all(search.id, JSON.stringify([...seenListingIds]));
+
+  for (const { listing_id } of staleCandidates) {
+    const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(listing_id);
+    if (!listing) {
+      db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id);
+      continue;
+    }
+    const { classification } = matchListing(listing, search);
+    if (classification === "REJECTED") {
+      db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id);
+    }
+  }
+
   // Update source status
   for (const [slug, status] of Object.entries(sourceStatuses)) {
     const sourceId = sourceMap[slug];

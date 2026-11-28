@@ -687,7 +687,7 @@ function App() {
     try {
       const r = await fetch(`/api/searches/${searchId}/check`,{method:"POST"}).then(r=>r.json());
       if (r.ok) {
-        setToast({msg:`Done — ${r.results} results, ${r.matches} matches`, type:"success"});
+        setToast({msg:`Done — ${r.results} fetched · ${r.matches} new · ${r.totalMatches ?? r.matches} total`, type:"success"});
         reloadSearches();
       } else {
         setToast({msg:r.error||"Scan failed", type:"error"});

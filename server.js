@@ -219,7 +219,8 @@ app.post("/api/searches/:id/check", async (req, res) => {
       }
     }
 
-    res.json({ ok: true, sourceStatuses, results: results.length, matches: matches.length, demo });
+    const totalMatches = db.prepare("SELECT COUNT(*) as n FROM search_matches WHERE search_id=?").get(search.id).n;
+    res.json({ ok: true, sourceStatuses, results: results.length, matches: matches.length, totalMatches, demo });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
