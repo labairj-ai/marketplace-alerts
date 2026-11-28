@@ -60,6 +60,29 @@ async function processScanResults(db, search, results, sourceStatuses) {
   }
 
   // ── 2. Lazy-geocode FB listings with location but no coordinates ──────────
+
+  // 2a. For FB listings in this scan that have no location_text, try to extract
+  // a "City, ST" pattern from the title. FB sometimes embeds location in multi-
+  // line titles (e.g. "Mac Studio\n...specs... in Pittsburgh, PA").
+  const CITY_STATE_RE = /\bin ([A-Z][a-z]+(?:\s[A-Z][a-z]+)*),\s*([A-Z]{2})\b/;
+  const noLocText = db.prepare(`
+    SELECT l.id, l.title, l.description FROM listings l
+    JOIN sources src ON src.id = l.source_id
+    WHERE src.slug = 'facebook_marketplace'
+      AND (l.location_text IS NULL OR l.location_text = '')
+      AND l.latitude IS NULL
+      AND l.id IN (SELECT value FROM json_each(?))
+  `).all(JSON.stringify([...seenListingIds]));
+  for (const { id, title, description } of noLocText) {
+    const text = `${title || ""} ${description || ""}`;
+    const m = text.match(CITY_STATE_RE);
+    if (m) {
+      db.prepare("UPDATE listings SET location_text=? WHERE id=?")
+        .run(`${m[1]}, ${m[2]}`, id);
+    }
+  }
+
+  // 2b. Geocode all FB listings that now have location_text but no coordinates
   const uncoordinated = db.prepare(`
     SELECT l.id, l.location_text FROM listings l
     JOIN sources src ON src.id = l.source_id
@@ -76,6 +99,28 @@ async function processScanResults(db, search, results, sourceStatuses) {
           .run(coords.lat, coords.lon, id);
       }
     }));
+
+    // Re-evaluate matches for listings geocoded in this scan.
+    // The stale-candidate check (step 3) won't catch these because they're
+    // in seenListingIds. Without this, a listing from 300 miles away passes
+    // on its first scan (no coords yet) then stays matched until FB stops
+    // returning it.
+    for (const { id: listingId } of uncoordinated) {
+      if (!seenListingIds.has(listingId)) continue;
+      const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(listingId);
+      if (!listing?.latitude) continue; // geocoding failed — can't re-evaluate
+      const match = db.prepare(
+        "SELECT id FROM search_matches WHERE search_id=? AND listing_id=?"
+      ).get(search.id, listingId);
+      if (!match) continue;
+      const { classification, reasons } = matchListing(listing, search);
+      if (classification === "REJECTED") {
+        db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?")
+          .run(search.id, listingId);
+      } else {
+        upsertMatch(db, search.id, listingId, classification, reasons);
+      }
+    }
   }
 
   // ── 3. Prune stale matches ────────────────────────────────────────────────
