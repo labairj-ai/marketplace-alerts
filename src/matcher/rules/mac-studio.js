@@ -7,6 +7,12 @@ const HIGH_MEM_VARIANTS = [
 
 // Explicit RAM mentions we can parse (GB)
 const RAM_PATTERN = /\b(\d+)\s*(?:gb|g)\b/gi;
+// Storage context: a GB value immediately followed by a storage keyword is not RAM
+const STORAGE_PATTERN = /\b(\d+)\s*gb\s+(?:ssd|hdd|nvme|flash|storage|drive)\b/gi;
+// RAM-explicit context: "XGB RAM", "XGB memory", "XGB unified memory"
+// Note: "RAM XGB" patterns are NOT used here because "36GB RAM 512GB SSD" would
+// match "RAM 512GB" and pick up the storage value. Only match GB→RAM direction.
+const RAM_EXPLICIT_PATTERN = /\b(\d+)\s*gb\s+(?:ram|memory|unified\s+memory)\b/gi;
 
 // Listings that mention these are definitely rejected — checked BEFORE the
 // isMacStudio guard so makeup/accessory listings with "MAC Studio" in the name
@@ -42,12 +48,21 @@ const REJECT_EXACT = [
 ];
 
 function extractRamGb(text) {
-  const matches = [...text.matchAll(RAM_PATTERN)].map(m => parseInt(m[1], 10));
-  if (!matches.length) return null;
-  // Filter to plausible Mac RAM values (16–768 GB)
-  const valid = matches.filter(n => n >= 16 && n <= 768);
-  if (!valid.length) return null;
-  return Math.max(...valid);
+  // Priority 1: explicit RAM/memory context ("36GB RAM", "64GB unified memory")
+  const explicit = [
+    ...[...text.matchAll(RAM_EXPLICIT_PATTERN)].map(m => parseInt(m[1], 10)),
+  ].filter(n => n >= 16 && n <= 768);
+  if (explicit.length > 0) return Math.max(...explicit);
+
+  // Priority 2: any GB value, but exclude values immediately adjacent to storage keywords
+  const storageValues = new Set(
+    [...text.matchAll(STORAGE_PATTERN)].map(m => parseInt(m[1], 10))
+  );
+  const all = [...text.matchAll(RAM_PATTERN)]
+    .map(m => parseInt(m[1], 10))
+    .filter(n => n >= 16 && n <= 768 && !storageValues.has(n));
+  if (!all.length) return null;
+  return Math.max(...all);
 }
 
 function isMacStudio(text) {

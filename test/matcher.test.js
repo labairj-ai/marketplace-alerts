@@ -70,6 +70,23 @@ describe("Mac Studio matching", () => {
     assert.ok(r.reasons.some(x => x.includes("32GB") || x.includes("32")));
   });
 
+  test("3b. Mac Studio 36GB RAM 512GB SSD is REJECTED (SSD capacity not mistaken for RAM)", () => {
+    const r = matchListing(
+      listing({ title: "Apple Mac Studio M4 Max 14-Core 36GB RAM 512GB SSD", latitude: 39.1031, longitude: -84.5120 }),
+      macStudioSearch()
+    );
+    assert.equal(r.classification, "REJECTED", "36GB RAM is below 64GB min — should not pass because of 512GB SSD");
+    assert.ok(r.reasons.some(x => x.includes("36GB") || x.includes("36")), `Reason should mention actual RAM: ${r.reasons}`);
+  });
+
+  test("3c. Mac Studio 64GB RAM 512GB SSD is CONFIRMED (correct RAM extracted when SSD also listed)", () => {
+    const r = matchListing(
+      listing({ title: "Apple Mac Studio M2 Max 64GB RAM 512GB SSD", latitude: 39.1031, longitude: -84.5120 }),
+      macStudioSearch()
+    );
+    assert.equal(r.classification, "CONFIRMED", "64GB RAM meets threshold despite 512GB SSD being present");
+  });
+
   test("4. Apple Studio Display is REJECTED", () => {
     const r = matchListing(
       listing({ title: "Apple Studio Display 27-inch", latitude: 39.1031, longitude: -84.5120 }),
