@@ -36,16 +36,16 @@ function matchListing(listing, search) {
     // Match against TITLE ONLY — description stores the CL search query term and
     // cannot be used for qualification (any listing fetched by query "X" has "X"
     // in description, so combined always self-matches).
-    const titleLower = listing.title.toLowerCase().replace(/-/g, "");
-    const primaryInTitle = keywords.some(kw => titleMatchesKeyword(kw, titleLower));
+    const titleTokens = tokenize(listing.title);
+    const primaryInTitle = keywords.some(kw => titleMatchesKeyword(kw, titleTokens));
 
     // Alt matching is two-tier:
     // - Multi-word alts (2+ words) are complete product names and match standalone
     //   e.g. "bounce house", "mini rebounder" match without the primary keyword present
     // - Single-word alts are qualifiers, not product names — "kids" means "kids trampoline",
     //   not "any listing with kids in the title". They must co-occur with every significant
-    //   word from at least one primary keyword to form an implicit compound phrase.
-    const altInTitle = alts.some(kw => altMatchesTitle(kw, titleLower, keywords));
+    //   token from at least one primary keyword to form an implicit compound phrase.
+    const altInTitle = alts.some(kw => altMatchesTitle(kw, titleTokens, keywords));
 
     if (!primaryInTitle && !altInTitle) {
       return result("REJECTED", ["No primary or alternate keywords matched listing title"], listing, search);
@@ -74,42 +74,70 @@ function matchListing(listing, search) {
   return mergeResult({ classification: "CONFIRMED", reasons }, geoResult, listing, search);
 }
 
-// Check if a keyword matches a listing title.
-// For 3+ word phrases (e.g. "Little Tikes Trampoline"), require every word (3+ chars)
-// to appear in the title rather than the exact substring — the title may have words
-// interspersed ("Little Tikes 3ft Trampoline"). For 1-2 word terms, exact substring.
-function titleMatchesKeyword(kw, titleLower) {
-  const kwNorm = kw.toLowerCase().replace(/-/g, "");
-  if (titleLower.includes(kwNorm)) return true;
-  const words = kwNorm.split(/\s+/).filter(w => w.length >= 3);
-  if (words.length >= 3) {
-    return words.every(w => titleLower.includes(w));
-  }
-  return false;
+// ── Text normalization ────────────────────────────────────────────────────────
+
+// Strip diacritics, lowercase, replace hyphens with spaces.
+function normalizeText(text) {
+  return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/-/g, " ");
 }
 
-// Alt keyword matching — two-tier based on word count:
-//
-// Multi-word alts (2+ words) are complete alternative product names and match
-// standalone: "bounce house" or "mini rebounder" can appear without the primary.
-//
-// Single-word alts are qualifiers, not product names. "kids" means the user wants
-// a "kids [primary]", not any listing that mentions kids. They require co-occurrence
-// with every significant word from at least one primary keyword — if none of the
-// primaries are also in the title, the qualifier has nothing to qualify.
-function altMatchesTitle(alt, titleLower, primaryKeywords) {
-  const altNorm = alt.trim().toLowerCase().replace(/-/g, "");
-  const altWords = altNorm.split(/\s+/);
+// Split normalized text into word tokens, filtering empty strings.
+function tokenize(text) {
+  return normalizeText(text).split(/[\s\W]+/).filter(w => w.length > 0);
+}
 
-  if (altWords.length >= 2) {
-    return titleMatchesKeyword(alt, titleLower);
+// Two tokens flex-match if they are equal, or — when the shorter is ≥4 chars —
+// one is a prefix of the other. This handles common morphological variants:
+//   "cards" ↔ "card", "collecting" ↔ "collect", "collection" ↔ "collect"
+// The ≥4-char guard prevents spurious matches ("can" ≠ "candy").
+function flexTokenMatch(a, b) {
+  if (a === b) return true;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  return shorter.length >= 4 && longer.startsWith(shorter);
+}
+
+// Check if a required token appears anywhere in the title's token list.
+function tokenInTitle(required, titleTokens) {
+  return titleTokens.some(t => flexTokenMatch(required, t));
+}
+
+// ── Keyword matching ──────────────────────────────────────────────────────────
+
+// All significant tokens of the keyword must appear somewhere in the title tokens.
+// Token order doesn't matter; flex matching handles plurals/morphology.
+// "Pokemon cards"  → ["pokemon","cards"] → matches "Pokemon Card Lot" (card≈cards)
+// "Little Tikes Trampoline" → ["little","tikes","trampoline"] → matches "Little Tikes 3ft Trampoline"
+function titleMatchesKeyword(kw, titleTokens) {
+  const kwTokens = tokenize(kw).filter(w => w.length >= 3);
+  if (kwTokens.length === 0) return false;
+  return kwTokens.every(tok => tokenInTitle(tok, titleTokens));
+}
+
+// Alt keyword matching — two-tier based on token count:
+//
+// Multi-token alts (2+ tokens) are complete alternative product names and match
+// standalone: "bounce house", "mini rebounder" match without the primary present.
+//
+// Single-token alts are qualifiers ("kids", "indoor"). They must co-occur with
+// all significant tokens of at least one primary keyword — "kids" only matches
+// if the primary concept (e.g. "trampoline") is also in the title.
+function altMatchesTitle(alt, titleTokens, primaryKeywords) {
+  const altTokens = tokenize(alt).filter(w => w.length >= 3);
+  if (altTokens.length === 0) return false;
+
+  if (altTokens.length >= 2) {
+    return altTokens.every(tok => tokenInTitle(tok, titleTokens));
   }
 
-  // Single-word alt: must co-occur with all significant words of at least one primary
-  if (!titleLower.includes(altNorm)) return false;
+  // Single-token alt: must co-occur with all significant tokens of at least one primary
+  if (!tokenInTitle(altTokens[0], titleTokens)) return false;
   return primaryKeywords.some(pk => {
-    const sigWords = pk.toLowerCase().replace(/-/g, "").split(/\s+/).filter(w => w.length >= 3);
-    return sigWords.every(w => titleLower.includes(w));
+    const pkTokens = tokenize(pk).filter(w => w.length >= 3);
+    return pkTokens.every(tok => tokenInTitle(tok, titleTokens));
   });
 }
 
