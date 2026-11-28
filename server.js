@@ -9,7 +9,6 @@ const {
 const { matchListing } = require("./src/matcher");
 const { runSearch, getProviders, isDemo } = require("./src/providers");
 const { processScanResults } = require("./src/scan");
-const { deliverPendingEventsWithRetry, sendTestEmail } = require("./src/notify");
 const { scoreListings } = require("./src/scorer");
 const { distanceFromSearch } = require("./src/geo");
 const scheduler = require("./src/scheduler");
@@ -45,7 +44,6 @@ app.get("/api/status", async (req, res) => {
   const lastScan = db.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").get();
   const totalListings = db.prepare("SELECT COUNT(*) as n FROM listings").get().n;
   const totalMatches  = db.prepare("SELECT COUNT(*) as n FROM search_matches").get().n;
-  const pendingAlerts = db.prepare("SELECT COUNT(*) as n FROM notification_events WHERE status='pending'").get().n;
 
   const sourceStatuses = {};
   for (const source of sources) {
@@ -68,7 +66,7 @@ app.get("/api/status", async (req, res) => {
       lastRun:  scheduler.getLastRun(),
       nextRun:  scheduler.getNextRun(),
     },
-    stats: { totalListings, totalMatches, pendingAlerts },
+    stats: { totalListings, totalMatches },
     lastScan: lastScan || null,
   });
 });
@@ -89,10 +87,8 @@ app.get("/api/searches", (req, res) => {
     s.keyword_alts     = safeJson(s.keyword_alts, []);
     s.exclude_keywords = safeJson(s.exclude_keywords, []);
     s.specs            = safeJson(s.specs, {});
-    s.enabled          = !!s.enabled;
-    s.notify_email     = !!s.notify_email;
-    s.notify_price_drop = !!s.notify_price_drop;
-    s.sources          = getSearchSourcesMap(db, s.id);
+    s.enabled  = !!s.enabled;
+    s.sources  = getSearchSourcesMap(db, s.id);
   }
 
   res.json(searches);
@@ -109,8 +105,8 @@ app.post("/api/searches", (req, res) => {
     INSERT INTO saved_searches
       (name, enabled, keywords, keyword_alts, brand, product_type, specs,
        price_min, price_max, center_lat, center_lon, center_label, radius_miles,
-       exclude_keywords, notify_email, notify_price_drop, price_drop_min_dollars, price_drop_min_pct)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       exclude_keywords)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     b.name,
     b.enabled !== false ? 1 : 0,
@@ -126,10 +122,6 @@ app.post("/api/searches", (req, res) => {
     b.center_label ?? "Cincinnati, OH",
     b.radius_miles ?? 75,
     JSON.stringify(b.exclude_keywords || []),
-    b.notify_email !== false ? 1 : 0,
-    b.notify_price_drop ? 1 : 0,
-    b.price_drop_min_dollars ?? null,
-    b.price_drop_min_pct ?? null,
   );
 
   const newId = r.lastInsertRowid;
@@ -188,9 +180,7 @@ app.put("/api/searches/:id", (req, res) => {
     UPDATE saved_searches SET
       name=?, enabled=?, keywords=?, keyword_alts=?, brand=?, product_type=?, specs=?,
       price_min=?, price_max=?, center_lat=?, center_lon=?, center_label=?,
-      radius_miles=?, exclude_keywords=?, notify_email=?,
-      notify_price_drop=?, price_drop_min_dollars=?, price_drop_min_pct=?,
-      updated_at=datetime('now')
+      radius_miles=?, exclude_keywords=?, updated_at=datetime('now')
     WHERE id=?
   `).run(
     b.name ?? existing.name,
@@ -207,10 +197,6 @@ app.put("/api/searches/:id", (req, res) => {
     b.center_label ?? existing.center_label,
     b.radius_miles ?? existing.radius_miles,
     JSON.stringify(b.exclude_keywords ?? safeJson(existing.exclude_keywords, [])),
-    b.notify_email !== undefined ? (b.notify_email ? 1 : 0) : existing.notify_email,
-    b.notify_price_drop !== undefined ? (b.notify_price_drop ? 1 : 0) : (existing.notify_price_drop ?? 0),
-    "price_drop_min_dollars" in b ? (b.price_drop_min_dollars ?? null) : (existing.price_drop_min_dollars ?? null),
-    "price_drop_min_pct"     in b ? (b.price_drop_min_pct     ?? null) : (existing.price_drop_min_pct     ?? null),
     id,
   );
 
@@ -250,17 +236,6 @@ app.post("/api/searches/:id/check", async (req, res) => {
     const { results, matches, totalMatches, sourceStatuses } = await require("./src/scan").runSingleSearch(db, search, { demo });
 
     res.json({ ok: true, sourceStatuses, results, matches, totalMatches, demo });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// ─── Test Email ───────────────────────────────────────────────────────────────
-
-app.post("/api/email/test", async (req, res) => {
-  try {
-    await sendTestEmail();
-    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

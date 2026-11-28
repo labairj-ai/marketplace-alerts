@@ -290,8 +290,7 @@ const EMPTY_FORM = {
   name:"", enabled:true, keywords:"", keyword_alts:"", brand:"",
   product_type:"", specs:{}, price_min:"", price_max:"",
   center_label:"Cincinnati, OH", center_lat:39.1031, center_lon:-84.5120, radius_miles:75,
-  exclude_keywords:"", notify_email:true,
-  notify_price_drop:false, price_drop_min_dollars:"", price_drop_min_pct:"",
+  exclude_keywords:"",
   sources:{ facebook_marketplace:true, craigslist:true },
 };
 
@@ -306,9 +305,6 @@ function SearchModal({ initial, onSave, onClose }) {
     setErr(null);
     if (!form.name.trim()) return setErr("Name is required.");
     if (!form.keywords.trim()) return setErr("At least one keyword is required.");
-    if (form.notify_price_drop && !form.price_drop_min_dollars && !form.price_drop_min_pct) {
-      return setErr("Enter a price-drop threshold ($ or %) to enable price-drop alerts.");
-    }
     setSaving(true);
 
     const payload = {
@@ -325,9 +321,6 @@ function SearchModal({ initial, onSave, onClose }) {
         ? { minRamGb: parseInt(form.macMinRam, 10) }
         : (form.specs || {}),
       product_type: pt || null,
-      notify_price_drop: form.notify_price_drop ? true : false,
-      price_drop_min_dollars: form.price_drop_min_dollars !== "" ? parseFloat(form.price_drop_min_dollars) : null,
-      price_drop_min_pct:     form.price_drop_min_pct     !== "" ? parseFloat(form.price_drop_min_pct)     : null,
     };
     await onSave(payload);
     setSaving(false);
@@ -440,42 +433,10 @@ function SearchModal({ initial, onSave, onClose }) {
 
         <div style={divider} />
 
-        {/* Price-drop alerts */}
-        <div style={{marginBottom:14}}>
-          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,marginBottom:10}}>
-            <input type="checkbox" checked={!!form.notify_price_drop}
-              onChange={e=>setForm({...form,notify_price_drop:e.target.checked})} />
-            <span style={{fontWeight:600}}>Notify me when a listing's price drops</span>
-          </label>
-          {form.notify_price_drop && (
-            <div style={{paddingLeft:22,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <div>
-                <label style={lbl}>Minimum drop ($)</label>
-                <input type="number" value={form.price_drop_min_dollars??""} style={inp} placeholder="e.g. 25"
-                  onChange={e=>setForm({...form,price_drop_min_dollars:e.target.value})} />
-              </div>
-              <div>
-                <label style={lbl}>Minimum drop (%)</label>
-                <input type="number" value={form.price_drop_min_pct??""} style={inp} placeholder="e.g. 10"
-                  onChange={e=>setForm({...form,price_drop_min_pct:e.target.value})} />
-              </div>
-              <div style={{gridColumn:"1/-1",fontSize:11,color:"var(--muted)"}}>
-                Either threshold can trigger an alert. Leave both blank to alert on any price drop.
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div style={divider} />
-
         <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:22}}>
           <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13}}>
             <input type="checkbox" checked={!!form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})} />
             Enabled
-          </label>
-          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13}}>
-            <input type="checkbox" checked={!!form.notify_email} onChange={e=>setForm({...form,notify_email:e.target.checked})} />
-            Email on confirmed match
           </label>
         </div>
 
@@ -728,27 +689,12 @@ function HistoryView() {
 function StatusView() {
   const [status, setStatus]   = useState(null);
   const [loading, setLoading] = useState(true);
-  const [testState, setTestState] = useState(null); // null | "sending" | "ok" | "error"
-  const [testMsg, setTestMsg] = useState("");
 
   const load = useCallback(() => {
     setLoading(true);
     API("/api/status").then(d => { setStatus(d); setLoading(false); });
   }, []);
   useEffect(() => { load(); const t = setInterval(load,30000); return ()=>clearInterval(t); }, [load]);
-
-  async function sendTest() {
-    setTestState("sending");
-    setTestMsg("");
-    try {
-      const r = await fetch("/api/email/test",{method:"POST"}).then(r=>r.json());
-      if (r.ok) { setTestState("ok"); setTestMsg("Test email sent successfully."); }
-      else       { setTestState("error"); setTestMsg(r.error || "Send failed."); }
-    } catch {
-      setTestState("error"); setTestMsg("Network error.");
-    }
-    setTimeout(() => setTestState(null), 6000);
-  }
 
   if (loading) return <Loader />;
   const fmtDate = d => d ? new Date(d).toLocaleString() : "Never";
@@ -773,7 +719,6 @@ function StatusView() {
           {label:"Next run",       value: status?.scheduler?.nextRun ? new Date(status.scheduler.nextRun).toLocaleTimeString() : "—"},
           {label:"Total listings", value: status?.stats?.totalListings ?? 0},
           {label:"Total matches",  value: status?.stats?.totalMatches  ?? 0},
-          {label:"Pending alerts", value: status?.stats?.pendingAlerts ?? 0},
         ].map(({label,value,hi}) => (
           <div key={label} style={{background:"var(--surface)",border:"1px solid var(--border)",
             borderRadius:10,padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}>
@@ -797,21 +742,6 @@ function StatusView() {
             <StatusBadge status={src.status} />
           </div>
         ))}
-      </Card>
-
-      {/* Email test */}
-      <Card style={{marginBottom:16}}>
-        <CardHeader>Email notifications</CardHeader>
-        <div style={{padding:"16px 20px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-          <Btn onClick={sendTest} variant="ghost" disabled={testState==="sending"}>
-            {testState==="sending" ? "Sending…" : "✉ Send Test Email"}
-          </Btn>
-          {testMsg && (
-            <span style={{fontSize:13,color: testState==="ok" ? "var(--green)" : "var(--red)", fontWeight:500}}>
-              {testState==="ok" ? "✓" : "✕"} {testMsg}
-            </span>
-          )}
-        </div>
       </Card>
 
       {status?.lastScan && (
@@ -903,7 +833,7 @@ function App() {
   function editForm(s) {
     const specs = s.specs || {};
     return {
-      name:s.name, enabled:s.enabled, notify_email:s.notify_email,
+      name:s.name, enabled:s.enabled,
       keywords:(s.keywords||[]).join(", "),
       keyword_alts:(s.keyword_alts||[]).join(", "),
       exclude_keywords:(s.exclude_keywords||[]).join(", "),
@@ -913,9 +843,6 @@ function App() {
       product_type:s.product_type||"",
       specs,
       macMinRam: specs.minRamGb ? String(specs.minRamGb) : "",
-      notify_price_drop: !!s.notify_price_drop,
-      price_drop_min_dollars: s.price_drop_min_dollars??"",
-      price_drop_min_pct:     s.price_drop_min_pct??"",
       sources: s.sources || { facebook_marketplace:true, craigslist:true },
     };
   }
