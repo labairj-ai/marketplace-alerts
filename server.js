@@ -19,6 +19,8 @@ const PORT = process.env.PORT || 3457;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public"), {
+  etag: false,
+  lastModified: false,
   setHeaders(res, filePath) {
     if (filePath.endsWith(".html")) {
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
