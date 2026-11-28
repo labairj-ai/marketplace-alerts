@@ -88,6 +88,7 @@ async function runSingleSearch(search, { db, demo }) {
   const sourceMap = Object.fromEntries(sourceRows.map(r => [r.slug, r.id]));
 
   const newMatches = [];
+  const seenListingIds = new Set();
 
   for (const item of results) {
     const sourceSlug = item._sourceSlug || "fixture";
@@ -95,6 +96,7 @@ async function runSingleSearch(search, { db, demo }) {
     if (!sourceId) continue;
 
     const listingId = upsertListing(db, sourceId, item);
+    seenListingIds.add(listingId);
     const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(listingId);
 
     const { classification, reasons } = matchListing(listing, search);
@@ -109,7 +111,6 @@ async function runSingleSearch(search, { db, demo }) {
       ).get(matchId);
 
       if (!existing?.notified && search.notify_email) {
-        // Only email-notify confirmed matches immediately; possible go to dashboard only
         if (classification === "CONFIRMED") {
           newMatches.push({
             classification,
@@ -125,27 +126,7 @@ async function runSingleSearch(search, { db, demo }) {
     }
   }
 
-  if (newMatches.length > 0) {
-    try {
-      await sendAlertEmail(search.name, newMatches);
-      console.log(`[Scheduler] Sent alert for "${search.name}" — ${newMatches.length} new match(es)`);
-    } catch (err) {
-      console.error(`[Scheduler] Email error for "${search.name}":`, err.message);
-    }
-  }
-
-  // Re-evaluate existing matches that weren't in this scan — prune any that
-  // now fail the matcher criteria (geo tightened, criteria changed, etc.)
-  const seenListingIds = new Set(results.map(item => {
-    const sourceSlug = item._sourceSlug || "fixture";
-    const sourceId = sourceMap[sourceSlug];
-    if (!sourceId) return null;
-    const existing = db.prepare(
-      "SELECT id FROM listings WHERE source_id=? AND external_id=?"
-    ).get(sourceId, item.listingId);
-    return existing?.id ?? null;
-  }).filter(Boolean));
-
+  // Prune existing matches that now fail the matcher (criteria tightened, etc.)
   const staleCandidates = db.prepare(
     "SELECT sm.listing_id FROM search_matches sm WHERE sm.search_id=? AND sm.listing_id NOT IN (SELECT value FROM json_each(?))"
   ).all(search.id, JSON.stringify([...seenListingIds]));
@@ -159,6 +140,39 @@ async function runSingleSearch(search, { db, demo }) {
     const { classification } = matchListing(listing, search);
     if (classification === "REJECTED") {
       db.prepare("DELETE FROM search_matches WHERE search_id=? AND listing_id=?").run(search.id, listing_id);
+    }
+  }
+
+  // Re-run the matcher against all previously-rejected listings in the DB.
+  // Any listing that now qualifies (new keywords, improved matching) gets
+  // matched and — if CONFIRMED and notify_email — triggers an alert.
+  const rejectedCandidates = db.prepare(`
+    SELECT l.id FROM listings l
+    JOIN sources src ON src.id = l.source_id
+    WHERE src.slug IN ('craigslist','facebook_marketplace')
+      AND l.id NOT IN (SELECT listing_id FROM search_matches WHERE search_id=?)
+      AND l.id NOT IN (SELECT value FROM json_each(?))
+      AND l.title != ''
+      AND l.title IS NOT NULL
+  `).all(search.id, JSON.stringify([...seenListingIds]));
+
+  for (const { id } of rejectedCandidates) {
+    const listing = db.prepare("SELECT * FROM listings WHERE id=?").get(id);
+    if (!listing) continue;
+    const { classification, reasons } = matchListing(listing, search);
+    if (classification === "REJECTED") continue;
+
+    const { id: matchId, isNew } = upsertMatch(db, search.id, id, classification, reasons);
+    if (isNew && search.notify_email && classification === "CONFIRMED") {
+      newMatches.push({
+        classification,
+        reasons: JSON.stringify(reasons),
+        listing_title: listing.title,
+        price: listing.price,
+        location_text: listing.location_text,
+        listing_url: listing.listing_url,
+      });
+      db.prepare("UPDATE search_matches SET notified=1, notified_at=datetime('now') WHERE id=?").run(matchId);
     }
   }
 

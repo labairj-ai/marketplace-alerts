@@ -14,7 +14,7 @@ Live URL: **https://optiplex.tailb97cdb.ts.net:3457/** (Tailscale Funnel, no aut
 - **Smart matching** — per-search-type matcher rules classify listings as CONFIRMED or REJECTED with labeled reasons; product-specific rules for Mac Studio and QIDI printers
 - **Two-tier alt keyword matching** — multi-word alts (e.g. "bounce house") match standalone; single-word alts (e.g. "kids") require co-occurrence with the primary keyword in the title to prevent false positives
 - **Geo filtering** — FB results geocoded via Nominatim and hard-filtered at the provider level; CL results filtered by lat/lon at the provider level before they reach the matcher or DB
-- **Scheduler pruning** — after each scheduled scan, existing matches that no longer pass the matcher are purged from the DB automatically
+- **Scheduler pruning + re-evaluation** — after each scheduled scan, stale matches that no longer pass the matcher are purged, and every previously-rejected listing is re-run so new criteria take effect without a manual Scan Now
 - **Email alerts** — Gmail SMTP; only fires on new CONFIRMED matches that haven't been seen before
 - **Web UI** — Watchlist, Listings table, History, and Status tabs; React via CDN, no build step
 - **30-minute scheduler** — node-cron, starts automatically with the systemd service
@@ -186,7 +186,12 @@ Provider fetch → geo pre-filter (provider level) → upsertListing (DB)
   → upsertMatch or delete from search_matches
 ```
 
-After each scan, existing matches not returned by the provider are re-evaluated against the current matcher — if they now fail (criteria changed, geo tightened, etc.) they are pruned.
+After each scan, three additional passes run against the DB:
+
+1. **Stale match pruning** — existing matches not in the current scan results are re-evaluated; those that now fail (criteria changed, geo tightened) are removed.
+2. **Rejected listing re-evaluation** — every previously-rejected listing in the DB is re-run through the matcher. Any that now qualify (new keywords, improved flex matching) are added as matches and trigger email alerts if CONFIRMED. This is the "standing rule": whenever matching criteria change, the next scheduled scan automatically catches up without requiring a manual Scan Now.
+
+Both passes also run on manual Scan Now, so the UI always reflects the current state of the matcher.
 
 ## Email Alerts
 
