@@ -39,11 +39,13 @@ function matchListing(listing, search) {
     const titleLower = listing.title.toLowerCase().replace(/-/g, "");
     const primaryInTitle = keywords.some(kw => titleMatchesKeyword(kw, titleLower));
 
-    // Single-word alts (e.g. "kids", "indoor") are too generic to serve as
-    // standalone title matches — they'd pass "Kids Snow Pants" for a trampoline
-    // search. Only 2+ word alts count as independent alternatives.
-    const meaningfulAlts = alts.filter(kw => kw.trim().split(/\s+/).length >= 2);
-    const altInTitle     = meaningfulAlts.some(kw => titleMatchesKeyword(kw, titleLower));
+    // Alt matching is two-tier:
+    // - Multi-word alts (2+ words) are complete product names and match standalone
+    //   e.g. "bounce house", "mini rebounder" match without the primary keyword present
+    // - Single-word alts are qualifiers, not product names — "kids" means "kids trampoline",
+    //   not "any listing with kids in the title". They must co-occur with every significant
+    //   word from at least one primary keyword to form an implicit compound phrase.
+    const altInTitle = alts.some(kw => altMatchesTitle(kw, titleLower, keywords));
 
     if (!primaryInTitle && !altInTitle) {
       return result("REJECTED", ["No primary or alternate keywords matched listing title"], listing, search);
@@ -84,6 +86,31 @@ function titleMatchesKeyword(kw, titleLower) {
     return words.every(w => titleLower.includes(w));
   }
   return false;
+}
+
+// Alt keyword matching — two-tier based on word count:
+//
+// Multi-word alts (2+ words) are complete alternative product names and match
+// standalone: "bounce house" or "mini rebounder" can appear without the primary.
+//
+// Single-word alts are qualifiers, not product names. "kids" means the user wants
+// a "kids [primary]", not any listing that mentions kids. They require co-occurrence
+// with every significant word from at least one primary keyword — if none of the
+// primaries are also in the title, the qualifier has nothing to qualify.
+function altMatchesTitle(alt, titleLower, primaryKeywords) {
+  const altNorm = alt.trim().toLowerCase().replace(/-/g, "");
+  const altWords = altNorm.split(/\s+/);
+
+  if (altWords.length >= 2) {
+    return titleMatchesKeyword(alt, titleLower);
+  }
+
+  // Single-word alt: must co-occur with all significant words of at least one primary
+  if (!titleLower.includes(altNorm)) return false;
+  return primaryKeywords.some(pk => {
+    const sigWords = pk.toLowerCase().replace(/-/g, "").split(/\s+/).filter(w => w.length >= 3);
+    return sigWords.every(w => titleLower.includes(w));
+  });
 }
 
 function inferProductType(search) {
