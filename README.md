@@ -11,9 +11,11 @@ Live URL: **https://optiplex.tailb97cdb.ts.net:3457/** (Tailscale Funnel, no aut
 ## Features
 
 - **Multi-source scanning** — Facebook Marketplace (Playwright, logged-in session) and Craigslist (JSON search API, no auth required)
-- **Smart matching** — per-search-type matcher rules classify listings as CONFIRMED, POSSIBLE, or REJECTED with labeled reasons (RAM, model variant, exclusions)
-- **Geo filtering** — FB results filtered to city lookup table within saved search radius; CL results filtered by keyword presence in title
-- **Email alerts** — Gmail SMTP; only fires on new CONFIRMED/POSSIBLE matches, not on re-scans of already-seen listings
+- **Smart matching** — per-search-type matcher rules classify listings as CONFIRMED or REJECTED with labeled reasons; product-specific rules for Mac Studio and QIDI printers
+- **Two-tier alt keyword matching** — multi-word alts (e.g. "bounce house") match standalone; single-word alts (e.g. "kids") require co-occurrence with the primary keyword in the title to prevent false positives
+- **Geo filtering** — FB results geocoded via Nominatim and hard-filtered at the provider level; CL results filtered by lat/lon at the provider level before they reach the matcher or DB
+- **Scheduler pruning** — after each scheduled scan, existing matches that no longer pass the matcher are purged from the DB automatically
+- **Email alerts** — Gmail SMTP; only fires on new CONFIRMED matches that haven't been seen before
 - **Web UI** — Watchlist, Listings table, History, and Status tabs; React via CDN, no build step
 - **30-minute scheduler** — node-cron, starts automatically with the systemd service
 
@@ -23,6 +25,7 @@ Live URL: **https://optiplex.tailb97cdb.ts.net:3457/** (Tailscale Funnel, no aut
 - **Frontend:** React 18 (CDN + Babel standalone, no build step)
 - **Database:** SQLite via better-sqlite3 (WAL mode)
 - **Browser automation:** Playwright + Chromium (FB Marketplace only)
+- **Geocoding:** Nominatim (rate-limited to 2 concurrent requests)
 - **Email:** nodemailer (Gmail SMTP)
 - **Scheduler:** node-cron
 
@@ -32,18 +35,23 @@ Live URL: **https://optiplex.tailb97cdb.ts.net:3457/** (Tailscale Funnel, no aut
 server.js              Express API + static file server
 seed.js                DB schema creation + initial data seed
 src/
-  db.js                DB helpers (upsertListing, upsertMatch)
-  scheduler.js         30-minute scan loop
+  db/
+    index.js           DB helpers (upsertListing, upsertMatch)
+  scheduler/
+    index.js           30-minute scan loop with post-scan match pruning
   matcher/
-    index.js           Routes listings to per-type matcher rules
+    index.js           Keyword + geo matching; two-tier alt logic
     rules/
       mac-studio.js    Apple Mac Studio matcher (RAM, variant detection)
       qidi.js          QIDI 3D printer matcher
   providers/
     index.js           runSearch() — iterates enabled providers
-    facebook.js        Playwright-based FB Marketplace scraper
-    craigslist.js      Craigslist JSON API (jsonsearch endpoint)
+    facebook.js        Playwright-based FB Marketplace scraper + Nominatim geo filter
+    craigslist.js      Craigslist JSON API (jsonsearch) + lat/lon geo pre-filter
     fixture.js         Demo/fixture data (PROVIDER_MODE=DEMO)
+  geo/
+    index.js           Haversine distance + city-center lookup table
+    geocoder.js        Nominatim geocoding with file cache + rate limiter
 scripts/
   fb-auth-setup.js     One-time FB session capture (run on Mac)
 public/
@@ -97,7 +105,7 @@ Repeat when the session expires (~30–90 days). The session file is gitignored 
 node seed.js
 ```
 
-This creates the schema and inserts the default saved searches (Apple Mac Studio, QIDI Printers Under $200).
+Creates the schema and inserts default saved searches (Apple Mac Studio, QIDI Printers Under $200).
 
 ### Run locally
 
@@ -136,27 +144,53 @@ tailscale funnel --bg --https=3457
 Managed via the Watchlist tab in the UI or directly via the API:
 
 ```
-POST /api/searches          create
-PUT  /api/searches/:id      update
-DELETE /api/searches/:id    delete
-POST /api/searches/:id/check   manual scan
+POST   /api/searches               create
+PUT    /api/searches/:id           update
+DELETE /api/searches/:id           delete
+POST   /api/searches/:id/check     manual scan + re-evaluation
 ```
 
-Each search has: `keywords` (primary), `keyword_alts` (secondary), `price_min/max`, `center_lat/lon`, `radius_miles`, `specs` (JSON — e.g. `{"minRamGb": 64}`), `notify_email`.
+Each search has: `keywords` (primary), `keyword_alts` (see below), `price_min/max`, `center_lat/lon`, `radius_miles`, `specs` (JSON — e.g. `{"minRamGb": 64}`), `notify_email`, `exclude_keywords`.
+
+### Keyword matching
+
+**Primary keywords** (`keywords`): any one must appear in the listing title.
+
+**Alt keywords** (`keyword_alts`): two-tier behavior:
+- **Multi-word alts** (2+ words, e.g. `"bounce house"`, `"mini rebounder"`) — match standalone. Use these for complete alternative product names.
+- **Single-word alts** (e.g. `"kids"`, `"indoor"`) — qualifier mode. Must co-occur with every significant word of at least one primary keyword in the title. `"kids"` with primary `"trampoline"` only matches titles that contain both — "Kids Trampoline" passes, "Kids Snow Pants" does not.
+
+**Exclusion keywords** (`exclude_keywords`): if any appear in title or description, the listing is rejected regardless of keyword matches.
 
 ## Providers
 
 ### Facebook Marketplace
 
-Uses Playwright (headless Chromium) with a saved browser session (`fb_session.json`). Searches the Cincinnati marketplace city ID with geolocation context. Results are geo-filtered against a city lookup table — only cities within the saved search radius are kept. Ships-to-you / nationwide listings are dropped.
+Uses Playwright (headless Chromium) with a saved browser session (`fb_session.json`). Searches the Cincinnati marketplace city ID with geolocation context. Each keyword gets its own tab (parallel, `allSettled`). Results are geocoded via Nominatim and hard-filtered against the search radius at the provider level — listings with unknown or out-of-range locations are dropped before they reach the matcher.
 
 ### Craigslist
 
-Uses the `jsonsearch` API endpoint (no auth, no Playwright, no RSS). Searches Cincinnati, Dayton, Lexington, and Columbus markets. Results are filtered to listings whose title contains at least one keyword before the matcher runs.
+Uses the `jsonsearch` API endpoint (no auth, no Playwright). Searches Cincinnati, Dayton, Lexington, and Columbus markets for each keyword. 3+ word phrases automatically expand to also search the last word (e.g. "Little Tikes Trampoline" also searches "trampoline"). Results are geo-filtered by lat/lon at the provider level before entering the DB. Title-only keyword matching is enforced at match time — description stores the CL query term and is not used for qualification.
+
+## Matching Pipeline
+
+```
+Provider fetch → geo pre-filter (provider level) → upsertListing (DB)
+  → matchListing:
+      1. Product-specific rules (Mac Studio / QIDI) if product_type set
+      2. Primary keyword in title
+      3. Alt keyword in title (two-tier: standalone multi-word, conjunctive single-word)
+      4. Exclusion keywords in title+description
+      5. Price range check
+      6. Geo distance check
+  → upsertMatch or delete from search_matches
+```
+
+After each scan, existing matches not returned by the provider are re-evaluated against the current matcher — if they now fail (criteria changed, geo tightened, etc.) they are pruned.
 
 ## Email Alerts
 
-Sent via Gmail SMTP when a scan finds a new CONFIRMED or POSSIBLE match that hasn't been seen before. Configure `EMAIL_FROM`, `EMAIL_TO`, and `EMAIL_APP_PASSWORD` in `.env`.
+Sent via Gmail SMTP when a scan finds a new CONFIRMED match that hasn't been seen before. Configure `EMAIL_FROM`, `EMAIL_TO`, and `EMAIL_APP_PASSWORD` in `.env`.
 
 ## Tests
 
