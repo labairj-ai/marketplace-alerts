@@ -76,6 +76,7 @@
       .ma-sidebar::-webkit-scrollbar { display: none; }
       .ma-sidebar-label { display: none !important; }
       .ma-sidebar-add { flex-shrink: 0 !important; width: auto !important; }
+      .ma-sidebar-item { flex-shrink: 0 !important; width: auto !important; }
       .ma-main { padding: 16px 12px !important; }
     }
   </style>
@@ -914,7 +915,7 @@ function App() {
           {searches.map(s => {
             const isActive = section === "search" && selectedId === s.id;
             return (
-              <button key={s.id} onClick={() => { setSelectedId(s.id); setSection("search"); }} style={{
+              <button key={s.id} className="ma-sidebar-item" onClick={() => { setSelectedId(s.id); setSection("search"); }} style={{
                 width:"100%",textAlign:"left",padding:"8px 10px",borderRadius:7,
                 background:isActive?"rgba(99,102,241,0.12)":"transparent",
                 border:isActive?"1px solid rgba(99,102,241,0.3)":"1px solid transparent",
