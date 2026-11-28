@@ -8,6 +8,7 @@ const {
 const { matchListing } = require("../matcher");
 const { runSearch } = require("../providers");
 const { deliverPendingEvents } = require("../notify");
+const { geocodeLocation } = require("../geo/geocoder");
 
 /**
  * Full scan pipeline for one saved search.
@@ -70,6 +71,29 @@ async function processScanResults(db, search, results, sourceStatuses) {
     matchCount++;
 
     _handleMatchEvent(db, search, matchId, listingId, listing, classification, reasons, isNew, prevClassification);
+  }
+
+  // ── 1b. Lazy-geocode FB listings with location but no coordinates ─────────
+  // Old listings pre-dating the geocoding pipeline have location_text but null
+  // lat/lon. Without coordinates, distanceFromSearch returns "unverified" and
+  // lets them pass the radius filter. Backfill coordinates now so subsequent
+  // matchListing calls use real distances.
+  const uncoordinated = db.prepare(`
+    SELECT l.id, l.location_text FROM listings l
+    JOIN sources src ON src.id = l.source_id
+    WHERE src.slug = 'facebook_marketplace'
+      AND l.location_text IS NOT NULL AND l.location_text != 'Ships to you'
+      AND l.latitude IS NULL AND l.longitude IS NULL
+    LIMIT 50
+  `).all();
+  if (uncoordinated.length) {
+    await Promise.all(uncoordinated.map(async ({ id, location_text }) => {
+      const coords = await geocodeLocation(location_text);
+      if (coords) {
+        db.prepare("UPDATE listings SET latitude=?, longitude=? WHERE id=?")
+          .run(coords.lat, coords.lon, id);
+      }
+    }));
   }
 
   // ── 2. Prune stale matches ────────────────────────────────────────────────
